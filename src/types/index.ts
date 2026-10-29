@@ -1,6 +1,6 @@
 // Type definitions for SANS AI Screening Platform
 
-export type UserRole = 
+export type UserRole =
   | 'recruiter'
   | 'manager'
   | 'admin'
