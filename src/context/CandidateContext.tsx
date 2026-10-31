@@ -36,7 +36,9 @@ interface CandidateContextType {
   bulkApproveShortlists: (targetAppIds?: string[]) => { approvedCount: number };
   approveShortlistForInterview: (appId: string) => void;
   recordCandidateInterviewResponse: (appId: string, transcriptData: { question: string; answer: string; score: number; feedbackEn?: string; feedbackAr?: string; hasAudioVoice?: boolean }) => void;
+  cancelInterviewDueToRuleViolation: (appId: string, violationDetails?: { en?: string; ar?: string }) => void;
   approveFinalSelection: (appId: string) => void;
+  bulkApproveFinalSelection: (appIds: string[]) => void;
   activeInterviewApp: CandidateApplication | null;
   setActiveInterviewApp: (app: CandidateApplication | null) => void;
   interviewQuestions: InterviewQuestionItem[];
@@ -53,7 +55,12 @@ const CandidateContext = createContext<CandidateContextType | undefined>(undefin
 export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [candidates, setCandidates] = useState<Candidate[]>(() => {
     const saved = localStorage.getItem('sans_candidates_state');
-    return saved ? JSON.parse(saved) : INITIAL_CANDIDATES;
+    const parsed: Candidate[] = saved ? JSON.parse(saved) : INITIAL_CANDIDATES;
+    return parsed.map(c => ({
+      ...c,
+      finalSelected: false,
+      shortlistedByRecruiter: false
+    }));
   });
 
   const [allRequisitions, setAllRequisitions] = useState<JobRequisition[]>(() => {
@@ -290,9 +297,21 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const file = customFiles[idx % customFiles.length];
         return {
           ...app,
+          requisitionId: activeRequisition.id,
+          requisitionCode: activeRequisition.code,
+          jobTitle: activeRequisition.title,
+          jobTitleAr: activeRequisition.titleAr,
           cvFileName: file.name
         };
       });
+    } else {
+      appsToAdd = BULK_COHORT_APPLICATIONS.map(app => ({
+        ...app,
+        requisitionId: activeRequisition.id,
+        requisitionCode: activeRequisition.code,
+        jobTitle: activeRequisition.title,
+        jobTitleAr: activeRequisition.titleAr
+      }));
     }
 
     setApplications(prev => {
@@ -310,6 +329,13 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       localStorage.setItem('sans_candidates_state', JSON.stringify(updated));
       return updated;
     });
+
+    setAllRequisitions(prev =>
+      prev.map(r => (r.id === activeRequisition.id || r.code === activeRequisition.code)
+        ? { ...r, totalApplicants: (r.totalApplicants || 0) + appsToAdd.length }
+        : r
+      )
+    );
 
     addAuditLog({
       actor: 'Sarah Al-Harbi & SANS Ingestion Gateway',
@@ -348,11 +374,15 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const now = new Date();
     const formattedDate = `${now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} AST`;
 
+    const candidateId = customDetails?.candidateId || 'cand-001';
+    const candidateName = customDetails?.candidateName || 'Mohammad Al-Zahrani';
+    const candidateNameAr = customDetails?.candidateNameAr || 'محمد الزهراني';
+
     const newApp: CandidateApplication = {
       id: newId,
-      candidateId: 'cand-001',
-      candidateName: 'Mohammad Al-Zahrani',
-      candidateNameAr: 'محمد الزهراني',
+      candidateId,
+      candidateName,
+      candidateNameAr,
       requisitionId: req.id,
       requisitionCode: req.code,
       jobTitle: req.title,
@@ -361,7 +391,7 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       departmentAr: req.departmentAr,
       location: req.location,
       submittedAt: formattedDate,
-      cvFileName: 'Mohammad_AlZahrani_Senior_ATC_CV.pdf',
+      cvFileName: `${candidateName.replace(/\s+/g, '_')}_CV.pdf`,
       status: 'Submitted',
       stageIndex: 1,
       cvScannedByRecruiter: false,
@@ -372,7 +402,17 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ...customDetails
     };
 
-    setApplications(prev => [newApp, ...prev.filter(a => a.requisitionCode !== req.code)]);
+    // CRITICAL: Preserve all other candidates' applications for this job requisition!
+    // Only replace if this exact candidate already had an application for this requisition.
+    setApplications(prev => {
+      const filtered = prev.filter(a =>
+        !(
+          (a.requisitionId === req.id || a.requisitionCode === req.code) &&
+          (a.candidateId === newApp.candidateId || a.candidateName?.toLowerCase() === newApp.candidateName?.toLowerCase())
+        )
+      );
+      return [newApp, ...filtered];
+    });
     setActiveInterviewApp(newApp);
 
     // Increment applicant count for that job requisition
@@ -381,12 +421,12 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     );
 
     addAuditLog({
-      actor: 'Mohammad Al-Zahrani',
-      actorAr: 'محمد الزهراني',
+      actor: candidateName,
+      actorAr: candidateNameAr,
       role: 'Applicant',
-      event: `Application & CV Submitted (${req.code} - ${req.title}) [Awaiting HR Screening]`,
-      eventAr: `تقديم السيرة الذاتية والطلب (${req.code}) [بانتظار الفرز الآلي للتوظيف]`,
-      subjectCandidate: 'Mohammad Al-Zahrani',
+      event: `Application & CV Submitted (${req.code} - ${req.title}) for ${candidateName}`,
+      eventAr: `تقديم السيرة الذاتية والطلب (${req.code}) للمرشح ${candidateNameAr}`,
+      subjectCandidate: candidateName,
       ncaControlRef: 'PDPL-Art-12 (Consent & Ingestion)',
       status: 'Verified'
     });
@@ -548,15 +588,6 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       })
     );
 
-    setCandidates(prev =>
-      prev.map(c => {
-        return {
-          ...c,
-          shortlistedByRecruiter: true
-        };
-      })
-    );
-
     addAuditLog({
       actor: 'Sarah Al-Harbi',
       actorAr: 'سارة الحربي',
@@ -572,9 +603,11 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const approveShortlistForInterview = (appId: string) => {
+    let targetApp: CandidateApplication | undefined = applications.find(a => a.id === appId);
     setApplications(prev =>
       prev.map(app => {
         if (app.id === appId) {
+          targetApp = app;
           const updated = {
             ...app,
             shortlistedByRecruiter: true,
@@ -590,25 +623,13 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       })
     );
 
-    setCandidates(prev =>
-      prev.map(c => {
-        if (c.id === 'cand-001' || c.name.includes('Al-Zahrani')) {
-          return {
-            ...c,
-            shortlistedByRecruiter: true
-          };
-        }
-        return c;
-      })
-    );
-
     addAuditLog({
       actor: 'Sarah Al-Harbi',
       actorAr: 'سارة الحربي',
       role: 'Senior Recruiter',
-      event: `Shortlist Approved & Virtual AI Interview Unlocked for Mohammad Al-Zahrani`,
-      eventAr: `اعتماد القائمة القصيرة وفتح المقابلة الذكية التفاعلية للمرشح محمد الزهراني`,
-      subjectCandidate: 'Mohammad Al-Zahrani',
+      event: `Shortlist Approved & Virtual AI Interview Unlocked for ${targetApp?.candidateName || 'Candidate'}`,
+      eventAr: `اعتماد القائمة القصيرة وفتح المقابلة الذكية التفاعلية للمرشح ${targetApp?.candidateNameAr || 'المرشح'}`,
+      subjectCandidate: targetApp?.candidateName || 'Mohammad Al-Zahrani',
       ncaControlRef: 'SANS-HR-GOV-01',
       status: 'Signed'
     });
@@ -682,10 +703,76 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
-  const approveFinalSelection = (appId: string) => {
+  const cancelInterviewDueToRuleViolation = (
+    appId: string,
+    violationDetails?: { en?: string; ar?: string }
+  ) => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' AST';
+    const reasonEn = violationDetails?.en || 'Rule Violated: Candidate navigated away from interview screen (switched browser tabs, minimized browser, or opened/focused an external application).';
+    const reasonAr = violationDetails?.ar || 'مخالفة الشروط: قام المرشح بمغادرة شاشة المقابلة (التبديل بين علامات التبويب، تصغير المتصفح، أو فتح تطبيق خارجي أثناء المقابلة).';
+
+    let violatedCandidateName = 'Mohammad Al-Zahrani';
+    let violatedCandidateNameAr = 'محمد الزهراني';
+
     setApplications(prev =>
       prev.map(app => {
         if (app.id === appId) {
+          if (app.candidateName) violatedCandidateName = app.candidateName;
+          if (app.candidateNameAr) violatedCandidateNameAr = app.candidateNameAr;
+          const updated: CandidateApplication = {
+            ...app,
+            status: 'Interview Canceled',
+            interviewCanceled: true,
+            ruleViolated: true,
+            cancellationReason: reasonEn,
+            cancellationReasonAr: reasonAr,
+            cancellationTimestamp: timestamp,
+            interviewScore: undefined,
+            finalSelected: false
+          };
+          if (activeInterviewApp && activeInterviewApp.id === appId) {
+            setActiveInterviewApp(updated);
+          }
+          return updated;
+        }
+        return app;
+      })
+    );
+
+    setCandidates(prev =>
+      prev.map(c => {
+        if (c.id === 'cand-001' || (violatedCandidateName && c.name?.toLowerCase().includes(violatedCandidateName.toLowerCase()))) {
+          return {
+            ...c,
+            interviewCanceled: true,
+            ruleViolated: true,
+            cancellationReason: reasonEn,
+            cancellationReasonAr: reasonAr,
+            interviewCompleted: false
+          };
+        }
+        return c;
+      })
+    );
+
+    addAuditLog({
+      actor: 'SANS Proctoring Engine',
+      actorAr: 'نظام مراقبة ونزاهة الاختبارات SANS',
+      role: 'Compliance AI',
+      event: `Interview Terminated & Canceled — Integrity Rule Violated: Window/Tab switch detected (${appId})`,
+      eventAr: `إنهاء وإلغاء المقابلة فورياً — مخالفة قواعد النزاهة: رصد مغادرة النافذة أو تبديل التطبيقات (${appId})`,
+      subjectCandidate: violatedCandidateName,
+      ncaControlRef: 'NCA-ECC-2-1-3 (Session Proctoring & Integrity)',
+      status: 'Signed'
+    });
+  };
+
+  const approveFinalSelection = (appId: string) => {
+    let targetApp: CandidateApplication | undefined = applications.find(a => a.id === appId);
+    setApplications(prev =>
+      prev.map(app => {
+        if (app.id === appId) {
+          targetApp = app;
           const updated = {
             ...app,
             finalSelected: true,
@@ -701,15 +788,30 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       })
     );
 
-    setCandidates(prev =>
-      prev.map(c => {
-        if (c.id === 'cand-001' || c.name.includes('Al-Zahrani')) {
+    addAuditLog({
+      actor: 'Sarah Al-Harbi',
+      actorAr: 'سارة الحربي',
+      role: 'Senior Recruiter',
+      event: `Final Candidate Selection Approved & Pushed to Offer Stage (Oracle HCM) for ${targetApp?.candidateName || 'Candidate'}`,
+      eventAr: `اعتماد الاختيار النهائي للمرشح وإصدار عرض العمل عبر أوراكل فيوجن للمرشح ${targetApp?.candidateNameAr || 'المرشح'}`,
+      subjectCandidate: targetApp?.candidateName || 'Mohammad Al-Zahrani',
+      ncaControlRef: 'SANS-HR-OFFER-2026',
+      status: 'Signed'
+    });
+  };
+
+  const bulkApproveFinalSelection = (appIds: string[]) => {
+    setApplications(prev =>
+      prev.map(app => {
+        if (appIds.includes(app.id)) {
           return {
-            ...c,
-            finalSelected: true
+            ...app,
+            finalSelected: true,
+            status: 'Offer Stage' as CandidateApplication['status'],
+            stageIndex: 4
           };
         }
-        return c;
+        return app;
       })
     );
 
@@ -717,10 +819,10 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       actor: 'Sarah Al-Harbi',
       actorAr: 'سارة الحربي',
       role: 'Senior Recruiter',
-      event: `Final Candidate Selection Approved & Pushed to Offer Stage (Oracle HCM)`,
-      eventAr: `اعتماد الاختيار النهائي للمرشح وإصدار عرض العمل عبر أوراكل فيوجن`,
-      subjectCandidate: 'Mohammad Al-Zahrani',
-      ncaControlRef: 'SANS-HR-OFFER-2026',
+      event: `Batch Final Candidate Selection Approved & Pushed to Offer Stage (Oracle HCM) for ${appIds.length} Candidates`,
+      eventAr: `اعتماد جماعي للاختيار النهائي وإصدار عروض العمل عبر أوراكل فيوجن لـ ${appIds.length} مرشحين`,
+      subjectCandidate: `Cohort Final Selection (${appIds.length} Candidates)`,
+      ncaControlRef: 'SANS-HR-OFFER-BATCH',
       status: 'Signed'
     });
   };
@@ -828,7 +930,9 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       bulkApproveShortlists,
       approveShortlistForInterview,
       recordCandidateInterviewResponse,
+      cancelInterviewDueToRuleViolation,
       approveFinalSelection,
+      bulkApproveFinalSelection,
       activeInterviewApp,
       setActiveInterviewApp,
       bulkUploadCvs,

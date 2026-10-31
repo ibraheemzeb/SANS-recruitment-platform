@@ -10,63 +10,26 @@ export interface NavItem {
   badge?: string;
 }
 
+export const UNIFIED_EMPLOYER_NAV_ITEMS: NavItem[] = [
+  { id: 'candidates_pipeline', labelEn: 'Candidates & AI Pipeline', labelAr: 'لوحة المرشحين والفرز الذكي', iconName: 'Users', badge: 'Live Pipeline' },
+  { id: 'bulk_upload', labelEn: 'Bulk CV Upload & AI Ingestion', labelAr: 'رفع السير والفرز الآلي الجماعي', iconName: 'FileUp', badge: 'AI Scan' },
+  { id: 'job_requisitions', labelEn: 'Jobs & AI Requisitions', labelAr: 'الوظائف الشاغرة ومعايير الفرز', iconName: 'Briefcase' },
+  { id: 'virtual_interview', labelEn: 'Interview Review & Offers', labelAr: 'تقييم المقابلات وإصدار العروض', iconName: 'Mic', badge: 'Offers' }
+];
+
 export const ROLE_NAV_ITEMS: Record<UserRole, NavItem[]> = {
-  recruiter: [
-    { id: 'recruiter_hub', labelEn: 'Recruitment Hub', labelAr: 'مركز عمليات التوظيف والفرز', iconName: 'LayoutDashboard', badge: 'Live Pipeline' },
-    { id: 'jobs_ai_rankings', labelEn: 'Jobs & AI Candidate Rankings', labelAr: 'الوظائف وترتيب المرشحين بالذكاء الاصطناعي', iconName: 'Briefcase', badge: 'AI Ranked' },
-    { id: 'cv_ingestion', labelEn: 'CV Ingestion & OCR', labelAr: 'استيعاب السير والمسح الآلي', iconName: 'FileUp' },
-    { id: 'ai_screening', labelEn: 'AI Screening & Matching', labelAr: 'المطابقة والفرز الذكي', iconName: 'Sparkles', badge: '18 Top' },
-    { id: 'virtual_interview', labelEn: 'Virtual Interview Review', labelAr: 'تقييم المقابلات الذكية', iconName: 'Mic' },
-    { id: 'clearances', labelEn: 'Clearances & Oracle Sync', labelAr: 'التحقق الأمني ومزامنة أوراكل', iconName: 'ShieldCheck' },
-    { id: 'sla_alerts', labelEn: 'SLA Watchdog & Alerts', labelAr: 'مراقبة الالتزام بالخدمة (SLA)', iconName: 'ClockAlert' }
-  ],
-  manager: [
-    { id: 'recruiter_hub', labelEn: 'Recruitment Hub', labelAr: 'مركز عمليات التوظيف والفرز', iconName: 'LayoutDashboard', badge: 'Pipeline' },
-    { id: 'jobs_ai_rankings', labelEn: 'Jobs & AI Candidate Rankings', labelAr: 'الوظائف وترتيب المرشحين بالذكاء الاصطناعي', iconName: 'Briefcase', badge: 'AI Ranked' },
-    { id: 'manager_dashboard', labelEn: 'ATC Department Hub', labelAr: 'مركز قيادة العمليات الملاحية', iconName: 'Users' },
-    { id: 'assigned_shortlists', labelEn: 'Assigned Candidate Shortlist', labelAr: 'قوائم المرشحين المحالين', iconName: 'Users', badge: '8 Pending' },
-    { id: 'candidate_comparison', labelEn: 'Side-by-Side Comparison', labelAr: 'المقارنة الميدانية للكفاءات', iconName: 'GitCompare' },
-    { id: 'virtual_interview', labelEn: 'Virtual Interview & Speech', labelAr: 'تحليل المقابلة الصوتية للمرشح', iconName: 'Headphones' },
-    { id: 'committee_approvals', labelEn: 'Final Committee Approvals', labelAr: 'اعتماد ومحاضر اللجان', iconName: 'CheckCircle2' }
-  ],
-  admin: [
-    { id: 'recruiter_hub', labelEn: 'Recruitment Hub', labelAr: 'مركز عمليات التوظيف والفرز', iconName: 'LayoutDashboard', badge: 'Pipeline' },
-    { id: 'jobs_ai_rankings', labelEn: 'Jobs & AI Candidate Rankings', labelAr: 'الوظائف وترتيب المرشحين بالذكاء الاصطناعي', iconName: 'Briefcase', badge: 'AI Ranked' },
-    { id: 'job_postings', labelEn: 'Post & Manage Jobs', labelAr: 'نشر وإدارة الوظائف الشاغرة', iconName: 'Briefcase', badge: 'Post Job' },
-    { id: 'admin_dashboard', labelEn: 'HR Admin Dashboard', labelAr: 'لوحة إدارة الموارد البشرية', iconName: 'Sliders' },
-    { id: 'virtual_interview', labelEn: 'Interview Review & Final Selection', labelAr: 'مراجعة المقابلات والاختيار النهائي', iconName: 'Mic' },
-    { id: 'scoring_rules', labelEn: 'Scoring Weights & Rules', labelAr: 'إعداد أوزان ومعايير الفرز', iconName: 'Sliders' },
-    { id: 'competency_banks', labelEn: 'Interview Rubric Banks', labelAr: 'نماذج وبنوك أسئلة المقابلات', iconName: 'BookOpen' },
-    { id: 'sla_rules', labelEn: 'SLA & Escalation Policies', labelAr: 'قواعد التنبيه وتصعيد الطلبات', iconName: 'BellRing' },
-    { id: 'subsidiary_config', labelEn: 'SANS / NERA / SACA Config', labelAr: 'إعدادات الشركات التابعة', iconName: 'Building2' }
-  ],
-  reviewer: [
-    { id: 'reviewer_dashboard', labelEn: 'Assessment Hub', labelAr: 'مركز قياس وتقييم الكفاءات', iconName: 'LayoutDashboard' },
-    { id: 'interview_questions', labelEn: 'Interview Question Bank & Rubrics', labelAr: 'بنك أسئلة المقابلات ونماذج التقييم', iconName: 'BookOpen', badge: 'Active Bank' },
-    { id: 'mercer_integration', labelEn: 'Mercer Cognitive Reports', labelAr: 'نتائج الاختبارات والقدرات (Mercer)', iconName: 'BrainCircuit' },
-    { id: 'interview_rubrics', labelEn: 'Speech & Verbatim Rubrics', labelAr: 'تحليل الأداء اللغوي والسلوكي', iconName: 'Quote' },
-    { id: 'final_dossiers', labelEn: 'Consolidated Dossier Packs', labelAr: 'الملف التقييمي الشامل للمرشح', iconName: 'FileCheck' }
-  ],
-  compliance: [
-    { id: 'compliance_dashboard', labelEn: 'Audit & Governance Hub', labelAr: 'مركز الامتثال والرقابة النظامية', iconName: 'LayoutDashboard' },
-    { id: 'accuracy_sla', labelEn: '95% AI Accuracy SLA', labelAr: 'مؤشر دقة الذكاء الاصطناعي (95%)', iconName: 'Target', badge: '96.2%' },
-    { id: 'audit_trail', labelEn: 'PDPL & NCA Audit Trail', labelAr: 'سجل العمليات والامتثال المعتمد', iconName: 'FileSpreadsheet' },
-    { id: 'data_residency', labelEn: 'KSA Data Residency Proof', labelAr: 'إثباتات الاستضافة الوطنية', iconName: 'Flag' },
-    { id: 'access_logs', labelEn: 'Access & Export Security', labelAr: 'سجلات الاطلاع والتصدير', iconName: 'Lock' }
-  ],
+  recruiter: UNIFIED_EMPLOYER_NAV_ITEMS,
+  manager: UNIFIED_EMPLOYER_NAV_ITEMS,
+  admin: UNIFIED_EMPLOYER_NAV_ITEMS,
+  reviewer: UNIFIED_EMPLOYER_NAV_ITEMS,
+  compliance: UNIFIED_EMPLOYER_NAV_ITEMS,
+  sysadmin: UNIFIED_EMPLOYER_NAV_ITEMS,
   candidate: [
     { id: 'candidate_status', labelEn: 'My Applications', labelAr: 'طلباتي ومسار التقديم', iconName: 'Compass', badge: '3 Active' },
     { id: 'explore_jobs', labelEn: 'Explore Jobs & Apply', labelAr: 'استعراض الوظائف والتقديم', iconName: 'LayoutDashboard', badge: '5 Open' },
     { id: 'virtual_interview_room', labelEn: 'Interactive AI Interview', labelAr: 'المقابلة الذكية (صوت ونص)', iconName: 'Video', badge: 'Ready' },
     { id: 'nafath_verification', labelEn: 'Nafath Digital Identity', labelAr: 'التوثيق الرقمي عبر نفاذ الوطني', iconName: 'Fingerprint' },
     { id: 'my_documents', labelEn: 'Certificates & Aviation Status', labelAr: 'الوثائق والشهادات الملاحية', iconName: 'FileBadge' }
-  ],
-  sysadmin: [
-    { id: 'sysadmin_dashboard', labelEn: 'IT Infrastructure Hub', labelAr: 'مركز التحكم والعمليات التقنية', iconName: 'LayoutDashboard' },
-    { id: 'oracle_gateway', labelEn: 'Oracle HCM REST Gateway', labelAr: 'بوابة تكامل أوراكل فيوجن', iconName: 'Server' },
-    { id: 'cloud_topology', labelEn: 'KSA Cloud Microservices', labelAr: 'صحة الخدمات السحابية والربط', iconName: 'Activity' },
-    { id: 'backup_recovery', labelEn: 'RPO/RTO & Backup Drill', labelAr: 'سجلات النسخ الاحتياطي والتعافي', iconName: 'Database' },
-    { id: 'api_keys', labelEn: 'Zero-Trust Security Keys', labelAr: 'إدارة مفاتيح الربط المشفرة', iconName: 'Key' }
   ]
 };
 
@@ -99,6 +62,9 @@ export const AuthRbacProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     // Cross-role shared tabs should never be bounced
     const sharedTabs = [
+      'candidates_pipeline',
+      'bulk_upload',
+      'job_requisitions',
       'recruiter_hub', 
       'virtual_interview', 
       'interview_evaluations', 

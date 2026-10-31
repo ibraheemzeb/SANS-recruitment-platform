@@ -97,6 +97,11 @@ export interface Candidate {
   interviewCompleted?: boolean;
   finalSelected?: boolean;
   hasAudioVoice?: boolean;
+  interviewCanceled?: boolean;
+  ruleViolated?: boolean;
+  cancellationReason?: string;
+  cancellationReasonAr?: string;
+  cancellationTimestamp?: string;
 }
 
 export interface AuditLog {
@@ -152,7 +157,7 @@ export interface CandidateApplication {
   location: string;
   submittedAt: string;
   cvFileName?: string;
-  status: 'Submitted' | 'AI Screening Passed' | 'Interview Scheduled' | 'Interview Completed' | 'Offer Stage' | 'Rejected';
+  status: 'Submitted' | 'AI Screening Passed' | 'Interview Scheduled' | 'Interview Completed' | 'Offer Stage' | 'Rejected' | 'Interview Canceled';
   stageIndex: number; // 1: Submitted, 2: AI Screening, 3: Virtual Interview, 4: Clearances & Offer
   screeningScore?: number;
   mandatoryCriteriaMet?: boolean;
@@ -171,6 +176,11 @@ export interface CandidateApplication {
   };
   hasAudioVoice?: boolean;
   finalSelected?: boolean;
+  interviewCanceled?: boolean;
+  ruleViolated?: boolean;
+  cancellationReason?: string;
+  cancellationReasonAr?: string;
+  cancellationTimestamp?: string;
   nafathStatus: 'Verified' | 'Pending' | 'Unverified';
 }
 
