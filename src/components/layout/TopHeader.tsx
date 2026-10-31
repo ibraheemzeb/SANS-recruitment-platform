@@ -36,13 +36,13 @@ export const TopHeader: React.FC = () => {
             onChange={(e) => setRole(e.target.value as UserRole)}
             id="rbac-persona-dropdown"
           >
-            <option value="recruiter">Sarah Al-Harbi (Senior Recruiter)</option>
-            <option value="manager">Capt. Khalid Al-Otaibi (Hiring Manager - ATC)</option>
+            <option value="recruiter">Sarah Al-Harbi (HR Specialist)</option>
+            <option value="manager">Capt. Khalid Al-Otaibi (Requirement Specialist)</option>
             <option value="admin">Mona Al-Dawsari (HR Administrator)</option>
             <option value="reviewer">Dr. Faisal Al-Harthi (Assessment Specialist)</option>
-            <option value="compliance">Waleed Al-Mutairi (Compliance &amp; PDPL)</option>
-            <option value="candidate">Mohammad Al-Zahrani (Candidate Portal)</option>
+            <option value="compliance">Waleed Al-Mutairi (Compliance Officer)</option>
             <option value="sysadmin">Eng. Yasser Al-Ghamdi (System Administrator)</option>
+            <option value="candidate">Mohammad Al-Zahrani (Candidate Portal)</option>
           </select>
         </div>
 

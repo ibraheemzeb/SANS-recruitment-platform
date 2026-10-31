@@ -826,22 +826,35 @@ html[dir="rtl"] .clean-table {
 }
 
 .speaking-pulse {
-  animation: mouthPulse 0.35s ease-in-out infinite alternate;
+  transform-origin: 50px 52px;
+  transform-box: fill-box;
+  animation: mouthRealisticSpeaking 0.28s ease-in-out infinite alternate;
 }
 
-@keyframes mouthPulse {
-  0% { transform: scaleY(0.6); }
-  100% { transform: scaleY(1.4); }
+@keyframes mouthRealisticSpeaking {
+  0% { transform: scaleY(0.92) scaleX(0.98); }
+  50% { transform: scaleY(1.08) scaleX(1.02); }
+  100% { transform: scaleY(0.96) scaleX(1.0); }
 }
 
-.speaking-indicator {
-  margin-top: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--color-primary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+@keyframes audioBar1 {
+  0% { height: 4px; }
+  100% { height: 16px; }
+}
+
+@keyframes audioBar2 {
+  0% { height: 16px; }
+  100% { height: 6px; }
+}
+
+.avatar-presence {
+  transform-origin: center bottom;
+  animation: avatarSubtleBreathing 4s ease-in-out infinite alternate;
+}
+
+@keyframes avatarSubtleBreathing {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-1.5px); }
 }
 
 .voice-controls-bar {
@@ -880,3 +893,15 @@ html[dir="rtl"] .transcript-display {
   padding: 1px 4px;
   border-radius: 2px;
 }
+
+@keyframes audioWaveDance {
+  0% { transform: scaleY(0.25); }
+  50% { transform: scaleY(1.0); }
+  100% { transform: scaleY(0.35); }
+}
+
+@keyframes pulseRedDot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.6; }
+}
+
