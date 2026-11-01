@@ -1986,6 +1986,38 @@ export const RecruiterView: React.FC = () => {
                               </p>
                             </div>
 
+                            {/* Prominent AI Content in Answer Inspector */}
+                            <div style={{
+                              backgroundColor: '#F0FDF4',
+                              border: '1px solid #BBF7D0',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '10px 14px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 8
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                <span style={{ fontSize: 11, fontWeight: 800, color: '#166534', textTransform: 'uppercase' }}>
+                                  {language === 'ar' ? 'فحص محتوى الذكاء الاصطناعي (AI Content Analysis):' : 'AI Content in Answer & Authenticity:'}
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, color: '#166534' }}>
+                                    Human: {item.humanOriginalityPercentage || 96}% | AI: {item.aiContentPercentage || 4}%
+                                  </span>
+                                  <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#15803D', fontSize: 10, fontWeight: 700 }}>
+                                    {language === 'ar' ? item.aiDetectionVerdictAr : item.aiDetectionVerdictEn}
+                                  </span>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                                {(language === 'ar' ? item.aiKeyConceptsDetectedAr : item.aiKeyConceptsDetectedEn).map((concept, cIdx) => (
+                                  <span key={cIdx} style={{ backgroundColor: '#FFFFFF', border: '1px solid #86EFAC', color: '#14532D', fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>
+                                    ✓ {concept}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
                             {/* Rubrics & AI Feedback */}
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10, fontSize: 11 }}>
                               <div style={{ padding: 10, backgroundColor: 'var(--color-subtle-green)', border: '1px solid var(--color-border-green)', borderRadius: 'var(--radius-sm)' }}>

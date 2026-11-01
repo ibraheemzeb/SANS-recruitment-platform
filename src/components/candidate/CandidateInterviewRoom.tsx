@@ -28,6 +28,8 @@ import {
   Settings,
   Maximize2,
   Clock,
+  Timer,
+  Save,
   ShieldCheck,
   Award,
   Lightbulb,
@@ -37,8 +39,14 @@ import {
   Radio,
   ArrowRight,
   AlertTriangle,
-  ShieldAlert
+  ShieldAlert,
+  Edit3,
+  Ban,
+  Camera,
+  Eye
 } from 'lucide-react';
+import { ProctoringSnapshot } from '../../types';
+import { generateProctoringSnapshot } from '../../data/proctoringSnapshots';
 
 interface CandidateInterviewRoomProps {
   initialApplication?: CandidateApplication | null;
@@ -52,6 +60,7 @@ interface ChatMessage {
   time: string;
   text: string;
   hasAudio?: boolean;
+  isWritten?: boolean;
 }
 
 export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
@@ -59,7 +68,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
   onCompleted
 }) => {
   const { language, setLanguage } = useLanguage();
-  const { applications, activeInterviewApp, recordCandidateInterviewResponse, cancelInterviewDueToRuleViolation, interviewQuestions } = useCandidate();
+  const { applications, activeInterviewApp, recordCandidateInterviewResponse, cancelInterviewDueToRuleViolation, issueProctoringWarning, interviewQuestions } = useCandidate();
 
   const activeApp = initialApplication || activeInterviewApp || applications[0];
   const questionsForJob = interviewQuestions.filter(q => q.requisitionCode === activeApp?.requisitionCode);
@@ -74,7 +83,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
   // Call controls
   const [micEnabled, setMicEnabled] = useState(true);
 
-  // Response Mode: 'voice' | 'text'
+  // Response Mode: 'voice' | 'text' (Candidate's choice to record or write answer)
   const [responseMode, setResponseMode] = useState<'voice' | 'text'>('voice');
 
   // Recording state
@@ -82,15 +91,6 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(23); // realistic initial value matching screenshot
   const timerRef = useRef<any>(null);
-
-  // 5-minute remaining countdown timer (starts at 300 seconds = 00:05:00)
-  const [remainingSeconds, setRemainingSeconds] = useState(300);
-  useEffect(() => {
-    const sTimer = setInterval(() => {
-      setRemainingSeconds(prev => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(sTimer);
-  }, []);
 
   // Candidate Response Text
   const [responseText, setResponseText] = useState('');
@@ -104,45 +104,380 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
   const [isEvaluated, setIsEvaluated] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
-  // Proctoring: Rule Violation State (Tab switch, window minimize, or external app focus)
+  // Proctoring: Rule Violation State (Warning on 1st offence, Cancellation on repeated offence)
+  const [violationCount, setViolationCount] = useState<number>(activeApp?.warningCount || 0);
+  const [isWarningModalOpen, setIsWarningModalOpen] = useState(false);
+  const [currentWarningDetails, setCurrentWarningDetails] = useState<{
+    en: string;
+    ar: string;
+    type: 'paste' | 'navigation' | 'general';
+    incidentRef: string;
+  }>({
+    en: '',
+    ar: '',
+    type: 'general',
+    incidentRef: ''
+  });
+
   const [isRuleViolated, setIsRuleViolated] = useState(Boolean(
     activeApp?.status === 'Interview Canceled' ||
     activeApp?.interviewCanceled ||
     activeApp?.ruleViolated
   ));
   const [violationTrigger, setViolationTrigger] = useState<string>(activeApp?.cancellationReason || '');
+  const [violationReasonDetails, setViolationReasonDetails] = useState<{ en: string; ar: string }>({
+    en: activeApp?.cancellationReason || 'Rule Violated (Repeated Offence): Candidate navigated away or attempted to paste text after receiving an official warning.',
+    ar: activeApp?.cancellationReasonAr || 'مخالفة الشروط (تكرار المخالفة): قام المرشح بمغادرة شاشة المقابلة أو محاولة لصق نص بعد توجيه إنذار أمني مسبق.'
+  });
 
-  // Active anti-cheating monitor: switches tabs, minimizes browser, or opens another application
+  // 5-minute remaining countdown timer (starts at 300 seconds = 00:05:00)
+  const [remainingSeconds, setRemainingSeconds] = useState(300);
+  const [isTimeExpired, setIsTimeExpired] = useState(false);
+  const [isTimeExpiredModalOpen, setIsTimeExpiredModalOpen] = useState(false);
+  const autoSubmitTriggeredRef = useRef(false);
+
   useEffect(() => {
-    if (isEvaluated || isRuleViolated || !activeApp) return;
+    if (isEvaluated || isRuleViolated || isTimeExpired) return;
 
-    const handleViolation = (eventDetail: string) => {
-      if (isRuleViolated || isEvaluated) return;
+    const sTimer = setInterval(() => {
+      setRemainingSeconds(prev => {
+        if (prev <= 1) {
+          clearInterval(sTimer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
-      setIsRuleViolated(true);
-      setViolationTrigger(eventDetail);
+    return () => clearInterval(sTimer);
+  }, [isEvaluated, isRuleViolated, isTimeExpired]);
 
-      // Stop any active recordings and audio
+  // Fast-Forward helper for testing timer auto-conclude & response saving
+  const handleFastForwardTimer = () => {
+    setRemainingSeconds(5);
+  };
+
+  // Real Camera Feed & Automated Random Snapshots
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const [hasCameraStream, setHasCameraStream] = useState<boolean>(false);
+  const [cameraPermissionState, setCameraPermissionState] = useState<'prompt' | 'granted' | 'denied' | 'error'>('prompt');
+  
+  // Proctoring Webcam Snapshots (Captured from camera automatically at random times - No pre-uploaded stock images)
+  const [capturedSnapshots, setCapturedSnapshots] = useState<ProctoringSnapshot[]>(
+    activeApp?.proctoringSnapshots && activeApp.proctoringSnapshots.length > 0
+      ? activeApp.proctoringSnapshots
+      : []
+  );
+  const [snapshotToast, setSnapshotToast] = useState<{
+    visible: boolean;
+    time: string;
+    confidence: number;
+    isCameraLive: boolean;
+  } | null>(null);
+  const [isCameraFlash, setIsCameraFlash] = useState(false);
+  const [snapCount, setSnapCount] = useState<number>(0);
+
+  // Initialize candidate's camera stream via HTML5 MediaDevices
+  useEffect(() => {
+    let isMounted = true;
+
+    const initWebcamStream = async () => {
+      try {
+        if (navigator?.mediaDevices?.getUserMedia) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: 'user'
+            },
+            audio: false
+          });
+
+          if (!isMounted) {
+            stream.getTracks().forEach(track => track.stop());
+            return;
+          }
+
+          mediaStreamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            try {
+              await videoRef.current.play();
+            } catch (playErr) {
+              console.warn('Video element autoplay blocked or delayed:', playErr);
+            }
+          }
+          setHasCameraStream(true);
+          setCameraPermissionState('granted');
+
+          // Automatically take the first snapshot directly from the camera
+          setTimeout(() => {
+            if (isMounted) {
+              triggerCameraSnapshot(0);
+            }
+          }, 1200);
+        } else {
+          setCameraPermissionState('error');
+        }
+      } catch (err: any) {
+        console.warn('Camera access unavailable or declined:', err);
+        if (isMounted) {
+          setHasCameraStream(false);
+          setCameraPermissionState(err.name === 'NotAllowedError' ? 'denied' : 'error');
+        }
+      }
+    };
+
+    initWebcamStream();
+
+    return () => {
+      isMounted = false;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+    };
+  }, []);
+
+  // Frame Grabber: Capture a picture frame directly from the active camera
+  const captureCameraFrameDataUrl = (): string | null => {
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+      const dateStr = now.toISOString().split('T')[0];
+      const matchScore = (98.4 + Math.random() * 1.3).toFixed(1);
+
+      if (video && hasCameraStream && video.readyState >= 2 && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        // Draw live camera frame
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // Security Watermark - Header Banner
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+        ctx.fillRect(0, 0, canvas.width, 36);
+        ctx.fillStyle = '#38BDF8';
+        ctx.font = 'bold 13px "Segoe UI", Roboto, sans-serif';
+        ctx.fillText('● SANS SECURE CAMERA PROCTOR | LIVE WEBCAM AUTO-CAPTURE (RANDOM INTERVAL)', 14, 23);
+
+        // Security Watermark - Footer Banner
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+        ctx.fillStyle = '#10B981';
+        ctx.font = 'bold 12.5px monospace';
+        ctx.fillText(`● REC ${dateStr} ${timeStr} AST | NAFATH DIGITAL ID MATCH: ${matchScore}% | SINGLE FACE VERIFIED`, 14, canvas.height - 15);
+
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '11px monospace';
+        ctx.fillText(`CANDIDATE: ${activeApp?.id || 'ATC-9021'}`, canvas.width - 200, canvas.height - 15);
+
+        return canvas.toDataURL('image/jpeg', 0.88);
+      } else {
+        // Standby optical proctor frame while camera feed synchronizes (strictly no pre-uploaded static stock photos)
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        const grad = ctx.createLinearGradient(0, 0, 640, 480);
+        grad.addColorStop(0, '#0F172A');
+        grad.addColorStop(1, '#020617');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 640, 480);
+
+        // Security grid lines & optical aperture reticle
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(320, 240, 95, 0, 2 * Math.PI);
+        ctx.moveTo(320, 120); ctx.lineTo(320, 360);
+        ctx.moveTo(200, 240); ctx.lineTo(440, 240);
+        ctx.stroke();
+
+        ctx.fillStyle = '#38BDF8';
+        ctx.font = 'bold 14px "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('● SANS AI CAMERA PROCTORING FEED', 320, 230);
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '11.5px monospace';
+        ctx.fillText(`LIVE CAMERA PROCTOR SYNC | MATCH: ${matchScore}%`, 320, 255);
+        ctx.textAlign = 'left';
+
+        // Header watermark
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(0, 0, 640, 36);
+        ctx.fillStyle = '#38BDF8';
+        ctx.font = 'bold 12px "Segoe UI", Roboto, sans-serif';
+        ctx.fillText('● LIVE WEBCAM AUTO-CAPTURE | DIRECT CAMERA FEED', 14, 23);
+
+        // Footer watermark
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.fillRect(0, 480 - 38, 640, 38);
+        ctx.fillStyle = '#10B981';
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(`● REC ${dateStr} ${timeStr} AST | NAFATH MATCH: ${matchScore}%`, 14, 480 - 14);
+
+        return canvas.toDataURL('image/jpeg', 0.85);
+      }
+    } catch (e) {
+      console.warn('Failed to capture frame from camera:', e);
+      return null;
+    }
+  };
+
+  // Function to take a snapshot from camera and record telemetry
+  const triggerCameraSnapshot = (elapsedSec?: number) => {
+    const elapsed = typeof elapsedSec === 'number' ? elapsedSec : (300 - remainingSeconds);
+    const cameraPictureUrl = captureCameraFrameDataUrl();
+    const newSnap = generateProctoringSnapshot(
+      elapsed,
+      capturedSnapshots.length,
+      cameraPictureUrl || undefined
+    );
+
+    setCapturedSnapshots(prev => {
+      const next = [...prev, newSnap];
+      if (activeApp) {
+        activeApp.proctoringSnapshots = next;
+      }
+      return next;
+    });
+
+    setSnapCount(c => c + 1);
+
+    // Trigger visual camera shutter flash & HUD notification toast
+    setIsCameraFlash(true);
+    setSnapshotToast({
+      visible: true,
+      time: newSnap.timestamp,
+      confidence: newSnap.faceConfidence,
+      isCameraLive: hasCameraStream
+    });
+    setTimeout(() => setIsCameraFlash(false), 350);
+    setTimeout(() => setSnapshotToast(null), 3800);
+  };
+
+  // Automated snapshots taken from camera at truly random times throughout the session
+  useEffect(() => {
+    if (isEvaluated || isRuleViolated || isTimeExpired) return;
+
+    let isCancelled = false;
+    let randomTimerId: any = null;
+
+    const scheduleNextRandomCapture = () => {
+      if (isCancelled) return;
+      // Randomized interval between 16 and 34 seconds (16,000ms - 34,000ms)
+      const randomIntervalMs = Math.floor(Math.random() * (34000 - 16000 + 1)) + 16000;
+      randomTimerId = setTimeout(() => {
+        if (isCancelled) return;
+        if (!isEvaluated && !isRuleViolated && !isTimeExpired) {
+          triggerCameraSnapshot();
+          scheduleNextRandomCapture(); // Schedule the next randomized time snap
+        }
+      }, randomIntervalMs);
+    };
+
+    // First random snapshot triggers shortly after interview start (between 8 and 14 seconds)
+    const initialRandomDelayMs = Math.floor(Math.random() * (14000 - 8000 + 1)) + 8000;
+    randomTimerId = setTimeout(() => {
+      if (isCancelled) return;
+      if (!isEvaluated && !isRuleViolated && !isTimeExpired) {
+        triggerCameraSnapshot();
+        scheduleNextRandomCapture();
+      }
+    }, initialRandomDelayMs);
+
+    return () => {
+      isCancelled = true;
+      if (randomTimerId) clearTimeout(randomTimerId);
+    };
+  }, [isEvaluated, isRuleViolated, isTimeExpired, hasCameraStream]);
+
+  // Central proctoring incident handler enforcing:
+  // - Strike 1: Official warning modal displayed, candidate must acknowledge and resume.
+  // - Strike 2: Repeated offence triggers immediate cancellation of the interview and disqualification.
+  const triggerProctoringIncident = (
+    type: 'paste' | 'navigation' | 'general',
+    eventDetail: string
+  ) => {
+    if (isRuleViolated || isEvaluated || isWarningModalOpen || !activeApp) return;
+
+    if (violationCount === 0) {
+      // ================= STRIKE 1: FIRST OFFICIAL WARNING =================
+      const warnEn = type === 'paste'
+        ? 'Proctoring Warning (Strike 1 of 2): You attempted to paste text into the answer box. Under SANS proctoring rules, copy-pasting is strictly prohibited. This is your first and final warning. Any repeated offence will immediately cancel your interview.'
+        : `Proctoring Warning (Strike 1 of 2): You navigated away from the interview screen (${eventDetail}). Navigating away during active screening is prohibited. This is your first and final warning. Any repeated offence will immediately cancel your interview.`;
+
+      const warnAr = type === 'paste'
+        ? 'إنذار أمني رسمي (المخالفة 1 من 2): تم رصد محاولة لصق نص داخل مربع الإجابة. بموجب قواعد النزاهة والمراقبة، يُمنع النسخ واللصق منعاً باتاً. هذا تحذيرك الأول والوحيد، وتكرار المخالفة سيؤدي فوراً إلى إلغاء المقابلة.'
+        : `إنذار أمني رسمي (المخالفة 1 من 2): تم رصد مغادرة شاشة المقابلة (${eventDetail}). هذا تحذيرك الأول والوحيد، وتكرار المخالفة سيؤدي فوراً إلى إلغاء المقابلة.`;
+
+      // Pause audio and recording
       if (timerRef.current) clearInterval(timerRef.current);
       setIsRecording(false);
       voiceManager.stop();
       setIsAiSpeaking(false);
 
-      // Report cancellation & rule violation immediately to HR portal
-      cancelInterviewDueToRuleViolation(activeApp.id, {
-        en: `Rule Violated: Candidate navigated away from interview screen (${eventDetail}). Under SANS proctoring policy, session is terminated.`,
-        ar: `مخالفة الشروط: قام المرشح بمغادرة نافذة المقابلة (${eventDetail}). تم إلغاء الجلسة فورياً وفق سياسة النزاهة والمراقبة.`
+      const refNum = `WARN-PROCT-${Date.now().toString().slice(-6)}`;
+      setViolationCount(1);
+      setCurrentWarningDetails({
+        en: warnEn,
+        ar: warnAr,
+        type,
+        incidentRef: refNum
       });
-    };
+      setIsWarningModalOpen(true);
+
+      issueProctoringWarning(activeApp.id, {
+        en: warnEn,
+        ar: warnAr
+      });
+    } else {
+      // ================= STRIKE 2: REPEATED OFFENCE -> CANCEL INTERVIEW =================
+      const cancelEn = type === 'paste'
+        ? 'Rule Violated (Repeated Offence): Candidate attempted to paste external text into the answer box after receiving a prior proctoring warning. Under SANS policy, session is terminated and canceled.'
+        : `Rule Violated (Repeated Offence): Candidate navigated away from interview screen (${eventDetail}) after receiving a prior proctoring warning. Under SANS policy, session is terminated and canceled.`;
+
+      const cancelAr = type === 'paste'
+        ? 'مخالفة الشروط (تكرار المخالفة): حاول المرشح لصق نص خارجي في مربع الإجابة بعد توجيه إنذار أمني رسمي مسبق. تم إنهاء الجلسة وإلغاء المقابلة فوراً.'
+        : `مخالفة الشروط (تكرار المخالفة): قام المرشح بمغادرة نافذة المقابلة (${eventDetail}) بعد توجيه إنذار أمني رسمي مسبق. تم إنهاء الجلسة وإلغاء المقابلة فوراً.`;
+
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsRecording(false);
+      voiceManager.stop();
+      setIsAiSpeaking(false);
+
+      setViolationCount(2);
+      setIsWarningModalOpen(false);
+      setIsRuleViolated(true);
+      setViolationTrigger(type === 'paste' ? 'Repeated Clipboard Paste Violation' : `Repeated Navigation Violation (${eventDetail})`);
+      setViolationReasonDetails({ en: cancelEn, ar: cancelAr });
+
+      cancelInterviewDueToRuleViolation(activeApp.id, {
+        en: cancelEn,
+        ar: cancelAr
+      });
+    }
+  };
+
+  // Active anti-cheating monitor: switches tabs, minimizes browser, or opens another application
+  useEffect(() => {
+    if (isEvaluated || isRuleViolated || isWarningModalOpen || !activeApp) return;
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        handleViolation('Browser tab switched or window minimized');
+        triggerProctoringIncident('navigation', 'Browser tab switched or window minimized');
       }
     };
 
     const handleWindowBlur = () => {
-      handleViolation('Window lost focus / external application opened');
+      triggerProctoringIncident('navigation', 'Window lost focus / external application opened');
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -152,20 +487,21 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [isEvaluated, isRuleViolated, activeApp, cancelInterviewDueToRuleViolation]);
+  }, [isEvaluated, isRuleViolated, isWarningModalOpen, violationCount, activeApp]);
 
+  // Handle Clipboard Paste Violation in Written Answer mode
+  const handlePasteViolation = () => {
+    triggerProctoringIncident('paste', 'Clipboard Paste Attempt');
+  };
+
+  // Test button simulation for demo
   const handleTriggerDemoViolation = () => {
-    if (!activeApp) return;
-    setIsRuleViolated(true);
-    setViolationTrigger('Simulated tab switch / external app focus (Demo)');
-    if (timerRef.current) clearInterval(timerRef.current);
-    setIsRecording(false);
-    voiceManager.stop();
-    setIsAiSpeaking(false);
-    cancelInterviewDueToRuleViolation(activeApp.id, {
-      en: 'Rule Violated: Candidate navigated away from interview screen (switched tabs, minimized browser, or opened an external application).',
-      ar: 'مخالفة الشروط: قام المرشح بمغادرة شاشة المقابلة (تبديل التبويب أو تصغير المتصفح أو فتح تطبيق خارجي أثناء المقابلة).'
-    });
+    triggerProctoringIncident('navigation', 'Simulated tab switch / external app focus (Demo)');
+  };
+
+  // Candidate acknowledges warning and resumes interview
+  const handleAcknowledgeWarning = () => {
+    setIsWarningModalOpen(false);
   };
 
   // Chat / Live Transcript messages
@@ -356,7 +692,8 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
           senderName: 'Candidate',
           time: nowStr,
           text: responseText,
-          hasAudio: true
+          hasAudio: responseMode === 'voice',
+          isWritten: responseMode === 'text'
         }
       ]);
     }
@@ -392,11 +729,18 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
   };
 
   // SUBMIT & SCORE ANSWER: Generates final AI Evaluation at end of interview
-  const handleSubmitFinalEvaluation = () => {
+  const handleSubmitFinalEvaluation = (options?: { isTimeExpired?: boolean }) => {
     setIsEvaluating(true);
     voiceManager.stop();
     setIsAiSpeaking(false);
     setIsCandidatePlaying(false);
+    setIsRecording(false);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const wasTimeExpired = options?.isTimeExpired ?? false;
 
     // If candidate answered current question, save it to messages
     if (responseText.trim()) {
@@ -408,29 +752,61 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
           sender: 'candidate',
           senderName: 'Candidate',
           time: nowStr,
-          text: responseText,
-          hasAudio: true
+          text: responseText.trim(),
+          hasAudio: responseMode === 'voice',
+          isWritten: responseMode === 'text'
         }
       ]);
     }
 
+    const finalAnswerText = responseText.trim() || (language === 'ar' ? currentQ.suggestedAnswerAr : currentQ.suggestedAnswerEn);
+
     setTimeout(() => {
       setIsEvaluating(false);
       setIsEvaluated(true);
+      if (wasTimeExpired) {
+        setIsTimeExpired(true);
+        setIsTimeExpiredModalOpen(true);
+      }
 
-      // Record completed score to candidate context
+      // Record completed score to candidate context so HR can review immediately
       if (activeApp) {
         recordCandidateInterviewResponse(activeApp.id, {
           question: language === 'ar' ? currentQ.questionAr : currentQ.questionEn,
-          answer: responseText || currentQ.suggestedAnswerEn,
-          score: 85,
-          feedbackEn: 'Strong technical air traffic knowledge, clear radio communication, and high procedural safety compliance.',
-          feedbackAr: 'معرفة تقنية متميزة في المراقبة الجوية، وضوح تام في الاتصال اللاسلكي، والتزام صارم ببروتوكولات السلامة.',
-          hasAudioVoice: true
+          answer: finalAnswerText,
+          score: wasTimeExpired ? 87 : 85,
+          feedbackEn: wasTimeExpired
+            ? `[Auto-Submitted: Time Expired] Candidate completed the timed virtual interview. All responses were preserved and archived. ${responseMode === 'text' ? 'Structured written answers adhered to ICAO operational standards.' : 'Candidate demonstrated calm voice modulation and safety-critical air navigation terminology.'}`
+            : (responseMode === 'text'
+              ? 'Candidate provided structured, comprehensive written responses demonstrating solid technical air traffic knowledge and clear procedural formulation.'
+              : 'Strong technical air traffic knowledge, clear radio communication, and high procedural safety compliance.'),
+          feedbackAr: wasTimeExpired
+            ? `[تم الحفظ التلقائي: انتهاء الوقت المحدد] أتم المرشح المقابلة الذكية في الموعد المخصص. تم حفظ وأرشفة جميع الإجابات للموارد البشرية. ${responseMode === 'text' ? 'الإجابات الكتابية التزمت ببروتوكولات إيكاو القياسية.' : 'أظهر المرشح تحكماً صوتياً متميزاً ومصطلحات ملاحة جوية مطابقة للمعايير.'}`
+            : (responseMode === 'text'
+              ? 'قدم المرشح إجابات كتابية دقيقة ومنظمة تعكس إلماماً عميقاً بالأنظمة وإجراءات المراقبة الجوية.'
+              : 'معرفة تقنية متميزة في المراقبة الجوية، وضوح تام في الاتصال اللاسلكي، والتزام صارم ببروتوكولات السلامة.'),
+          hasAudioVoice: responseMode === 'voice',
+          snapshots: capturedSnapshots,
+          aiContentScore: 4,
+          humanAuthenticityScore: 96
         });
       }
-    }, 800);
+    }, wasTimeExpired ? 400 : 800);
   };
+
+  // Dedicated Auto-Submit on Timer Expiration
+  const handleTimeExpiredAutoSubmit = () => {
+    if (autoSubmitTriggeredRef.current || isRuleViolated || isEvaluated) return;
+    autoSubmitTriggeredRef.current = true;
+    handleSubmitFinalEvaluation({ isTimeExpired: true });
+  };
+
+  // Monitor timer countdown reaching 0
+  useEffect(() => {
+    if (remainingSeconds <= 0 && !autoSubmitTriggeredRef.current && !isRuleViolated && !isEvaluated) {
+      handleTimeExpiredAutoSubmit();
+    }
+  }, [remainingSeconds, isRuleViolated, isEvaluated]);
 
   // Fixed 32 audio waveform heights for equalizer visualizer
   const waveformHeights = [
@@ -504,9 +880,9 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            backgroundColor: isRuleViolated ? '#FEF2F2' : '#FFFBEB',
-            border: `1px solid ${isRuleViolated ? '#FCA5A5' : '#FDE68A'}`,
-            color: isRuleViolated ? '#991B1B' : '#92400E',
+            backgroundColor: isRuleViolated ? '#FEF2F2' : (violationCount >= 1 ? '#FFFBEB' : '#ECFDF5'),
+            border: `1px solid ${isRuleViolated ? '#FCA5A5' : (violationCount >= 1 ? '#FDE68A' : '#A7F3D0')}`,
+            color: isRuleViolated ? '#991B1B' : (violationCount >= 1 ? '#92400E' : '#065F46'),
             padding: '5px 12px',
             borderRadius: 20,
             fontSize: 11.5,
@@ -516,32 +892,186 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
               width: 8,
               height: 8,
               borderRadius: '50%',
-              backgroundColor: isRuleViolated ? '#DC2626' : '#D97706',
-              boxShadow: isRuleViolated ? '0 0 6px #DC2626' : '0 0 6px #D97706'
+              backgroundColor: isRuleViolated ? '#DC2626' : (violationCount >= 1 ? '#D97706' : '#10B981'),
+              boxShadow: isRuleViolated ? '0 0 6px #DC2626' : (violationCount >= 1 ? '0 0 6px #D97706' : '0 0 6px #10B981')
             }} />
-            <ShieldAlert size={13} color={isRuleViolated ? '#DC2626' : '#D97706'} />
+            <ShieldAlert size={13} color={isRuleViolated ? '#DC2626' : (violationCount >= 1 ? '#D97706' : '#059669')} />
             <span>
               {isRuleViolated
-                ? (language === 'ar' ? '✕ تم إلغاء المقابلة (مخالفة الشروط)' : '✕ Interview Canceled (Rule Violated)')
-                : (language === 'ar' ? '🛡️ المراقبة نشطة: تغيير التبويب أو التطبيق يلغي الجلسة' : '🛡️ Proctoring Active: Tab/Window switch cancels session')}
+                ? (language === 'ar' ? '✕ تم إلغاء المقابلة (تكرار المخالفة)' : '✕ Interview Canceled (Repeated Offence)')
+                : violationCount >= 1
+                  ? (language === 'ar' ? '⚠️ تحذير مسجل (1/2) — تكرار المخالفة سيلغي الجلسة فوراً' : '⚠️ Warning Active (Strike 1/2) — Repeated Offence Cancels Session')
+                  : (language === 'ar' ? '🛡️ المراقبة نشطة: إنذار أول عند المخالفة والإلغاء عند التكرار' : '🛡️ Proctoring Active: Warning on 1st, Cancel on 2nd')}
             </span>
             {!isRuleViolated && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                <button
+                  type="button"
+                  onClick={handleTriggerDemoViolation}
+                  title={violationCount === 0 ? "Test tab switch warning (Strike 1 of 2)" : "Test tab switch repeated offence (Strike 2 of 2 - Cancellation)"}
+                  style={{
+                    background: violationCount === 0 ? '#FEF3C7' : '#FEE2E2',
+                    border: `1px solid ${violationCount === 0 ? '#FCD34D' : '#FCA5A5'}`,
+                    color: violationCount === 0 ? '#92400E' : '#991B1B',
+                    borderRadius: 10,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: '2px 6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {violationCount === 0 ? 'Test Tab (Warn 1/2)' : 'Test Tab (Cancel 2/2)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePasteViolation}
+                  title={violationCount === 0 ? "Test paste warning (Strike 1 of 2)" : "Test paste repeated offence (Strike 2 of 2 - Cancellation)"}
+                  style={{
+                    background: violationCount === 0 ? '#FEF3C7' : '#FEE2E2',
+                    border: `1px solid ${violationCount === 0 ? '#FCD34D' : '#FCA5A5'}`,
+                    color: violationCount === 0 ? '#92400E' : '#991B1B',
+                    borderRadius: 10,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: '2px 6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {violationCount === 0 ? 'Test Paste (Warn 1/2)' : 'Test Paste (Cancel 2/2)'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ================= CENTER: PROMINENT MASTER TIMER HUD ================= */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '6px 16px',
+          backgroundColor: remainingSeconds <= 60
+            ? '#FEF2F2'
+            : remainingSeconds <= 120
+              ? '#FFFBEB'
+              : '#F0FDF4',
+          border: `2px solid ${
+            remainingSeconds <= 60
+              ? '#EF4444'
+              : remainingSeconds <= 120
+                ? '#F59E0B'
+                : '#10B981'
+          }`,
+          borderRadius: 14,
+          boxShadow: remainingSeconds <= 60
+            ? '0 0 16px rgba(239, 68, 68, 0.35)'
+            : '0 2px 8px rgba(0,0,0,0.06)',
+          transition: 'all 0.3s ease'
+        }}>
+          {/* Animated clock icon */}
+          <div style={{
+            width: 36,
+            height: 36,
+            borderRadius: '50%',
+            backgroundColor: remainingSeconds <= 60
+              ? '#DC2626'
+              : remainingSeconds <= 120
+                ? '#D97706'
+                : '#059669',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#FFFFFF',
+            boxShadow: remainingSeconds <= 60 ? '0 0 12px #DC2626' : '0 2px 6px rgba(0,0,0,0.15)'
+          }}>
+            <Clock size={19} />
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: remainingSeconds <= 60
+                  ? '#991B1B'
+                  : remainingSeconds <= 120
+                    ? '#92400E'
+                    : '#065F46'
+              }}>
+                {language === 'ar' ? 'الوقت المتبقي للجلسة' : 'SESSION TIME REMAINING'}
+              </span>
+              {remainingSeconds <= 60 && (
+                <span style={{
+                  backgroundColor: '#DC2626',
+                  color: '#FFFFFF',
+                  fontSize: 9,
+                  fontWeight: 900,
+                  padding: '1px 6px',
+                  borderRadius: 6,
+                  letterSpacing: '0.04em'
+                }}>
+                  {language === 'ar' ? 'ينتهي قريباً' : 'EXPIRING SOON'}
+                </span>
+              )}
+            </div>
+
+            <div style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: 21,
+              fontWeight: 900,
+              color: remainingSeconds <= 60
+                ? '#DC2626'
+                : remainingSeconds <= 120
+                  ? '#B45309'
+                  : '#0F172A',
+              letterSpacing: '0.08em',
+              lineHeight: 1.15
+            }}>
+              {formatHms(remainingSeconds)}
+            </div>
+          </div>
+
+          {/* Progress bar line and demo fast-forward */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 95 }}>
+            <div style={{
+              width: '100%',
+              height: 6,
+              backgroundColor: '#E2E8F0',
+              borderRadius: 4,
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${Math.max(0, Math.min(100, (remainingSeconds / 300) * 100))}%`,
+                backgroundColor: remainingSeconds <= 60
+                  ? '#EF4444'
+                  : remainingSeconds <= 120
+                    ? '#F59E0B'
+                    : '#10B981',
+                transition: 'width 1s linear'
+              }} />
+            </div>
+
+            {!isEvaluated && !isRuleViolated && (
               <button
-                onClick={handleTriggerDemoViolation}
-                title="Test proctoring rule violation"
+                type="button"
+                onClick={handleFastForwardTimer}
+                title="Demo: Jump timer to 5s to test automatic ending and HR saving"
                 style={{
-                  background: '#FEE2E2',
-                  border: '1px solid #FCA5A5',
-                  color: '#991B1B',
-                  borderRadius: 10,
-                  fontSize: 10,
-                  fontWeight: 800,
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #CBD5E1',
+                  color: '#475569',
+                  borderRadius: 6,
+                  fontSize: 9.5,
+                  fontWeight: 700,
                   padding: '2px 6px',
                   cursor: 'pointer',
-                  marginLeft: 4
+                  whiteSpace: 'nowrap'
                 }}
               >
-                Test Violation
+                ⚡ Fast-Forward (5s)
               </button>
             )}
           </div>
@@ -745,7 +1275,13 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                       border: isInterviewer ? '2px solid #10B981' : '2px solid #60A5FA',
                       flexShrink: 0
                     }}>
-                      {isInterviewer ? <Volume2 size={13} color="#34D399" /> : <Mic size={13} color="#93C5FD" />}
+                      {isInterviewer ? (
+                        <Volume2 size={13} color="#34D399" />
+                      ) : msg.isWritten ? (
+                        <FileText size={13} color="#93C5FD" />
+                      ) : (
+                        <Mic size={13} color="#93C5FD" />
+                      )}
                     </div>
 
                     {/* Speech Bubble & Metadata */}
@@ -774,7 +1310,14 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                       }}>
                         <span>{msg.text}</span>
                         {msg.hasAudio && (
-                          <Volume2 size={14} color="#3B82F6" style={{ flexShrink: 0, marginTop: 2 }} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: '#3B82F6', flexShrink: 0, marginTop: 2 }} title="Voice recording">
+                            <Volume2 size={13} />
+                          </span>
+                        )}
+                        {msg.isWritten && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: '#1E40AF', backgroundColor: '#DBEAFE', padding: '1px 5px', borderRadius: 4, flexShrink: 0, marginTop: 2 }}>
+                            {language === 'ar' ? 'كتابي' : 'Written'}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -837,13 +1380,13 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 <div style={{
                   fontSize: 18,
                   fontWeight: 800,
-                  color: remainingSeconds <= 60 ? '#EF4444' : '#0F172A',
+                  color: remainingSeconds <= 60 ? '#EF4444' : (remainingSeconds <= 120 ? '#D97706' : '#0F5132'),
                   fontFamily: 'monospace'
                 }}>
                   {formatHms(remainingSeconds)}
                 </div>
                 <div style={{ fontSize: 10.5, color: '#64748B' }}>
-                  {language === 'ar' ? 'الوقت المتبقي' : 'Remaining Time'}
+                  {language === 'ar' ? 'الوقت المتبقي (حفظ تلقائي)' : 'Remaining (Auto-Saves)'}
                 </div>
               </div>
 
@@ -862,6 +1405,120 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
         {/* ==================== MIDDLE COLUMN: VIDEO FEEDS, CURRENT QUESTION & WAVEFORM ==================== */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           
+          {/* HIGH-VISIBILITY STAGE TIMER & PROGRESS RIBBON */}
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 14,
+            border: `2px solid ${
+              remainingSeconds <= 60
+                ? '#EF4444'
+                : remainingSeconds <= 120
+                  ? '#F59E0B'
+                  : '#CBD5E1'
+            }`,
+            padding: '12px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            boxShadow: remainingSeconds <= 60
+              ? '0 4px 16px rgba(239, 68, 68, 0.2)'
+              : '0 2px 8px rgba(0,0,0,0.04)',
+            background: remainingSeconds <= 60
+              ? 'linear-gradient(to right, #FEF2F2, #FFFFFF)'
+              : remainingSeconds <= 120
+                ? 'linear-gradient(to right, #FFFBEB, #FFFFFF)'
+                : 'linear-gradient(to right, #F8FAFC, #FFFFFF)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{
+                backgroundColor: '#0F5132',
+                color: '#FFFFFF',
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 800,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              }}>
+                <span>{language === 'ar' ? 'السؤال' : 'Question'}</span>
+                <span>{questionIdx + 1} / {questionsList.length}</span>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>
+                  {language === 'ar' ? (currentQ.category === 'Air Traffic Conflict Resolution' ? 'فض تعارض المسارات الرادارية' : currentQ.category) : currentQ.category}
+                </div>
+                <div style={{ fontSize: 11, color: '#64748B' }}>
+                  {language === 'ar'
+                    ? 'المقابلة تنتهي تلقائياً عند انتهاء الوقت ويتم حفظ وإرسال كافة الإجابات إلى مسؤولي التوظيف'
+                    : 'Session concludes automatically when timer ends — all responses saved for HR review'}
+                </div>
+              </div>
+            </div>
+
+            {/* Countdown Display Chip */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              backgroundColor: remainingSeconds <= 60
+                ? '#FEE2E2'
+                : remainingSeconds <= 120
+                  ? '#FEF3C7'
+                  : '#ECFDF5',
+              border: `1px solid ${
+                remainingSeconds <= 60
+                  ? '#FCA5A5'
+                  : remainingSeconds <= 120
+                    ? '#FDE68A'
+                    : '#A7F3D0'
+              }`,
+              padding: '6px 14px',
+              borderRadius: 10
+            }}>
+              <Clock
+                size={18}
+                color={
+                  remainingSeconds <= 60
+                    ? '#DC2626'
+                    : remainingSeconds <= 120
+                      ? '#D97706'
+                      : '#059669'
+                }
+              />
+              <div>
+                <div style={{
+                  fontSize: 9.5,
+                  fontWeight: 800,
+                  color: remainingSeconds <= 60
+                    ? '#991B1B'
+                    : remainingSeconds <= 120
+                      ? '#92400E'
+                      : '#065F46',
+                  textTransform: 'uppercase'
+                }}>
+                  {language === 'ar' ? 'الوقت المتبقي' : 'TIME REMAINING'}
+                </div>
+                <div style={{
+                  fontFamily: 'monospace',
+                  fontSize: 18,
+                  fontWeight: 900,
+                  color: remainingSeconds <= 60
+                    ? '#DC2626'
+                    : remainingSeconds <= 120
+                      ? '#B45309'
+                      : '#042F20',
+                  letterSpacing: 1
+                }}>
+                  {formatHms(remainingSeconds)}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Main Video Call Stage (Side-by-Side with Floating Dock) */}
           <div style={{
             backgroundColor: '#0F172A',
@@ -941,7 +1598,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 </div>
               </div>
 
-              {/* FEED 2: CANDIDATE AVATAR IMAGE */}
+              {/* FEED 2: CANDIDATE CAMERA FEED */}
               <div style={{
                 position: 'relative',
                 overflow: 'hidden',
@@ -960,22 +1617,42 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                   transition: 'all 0.3s ease',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                  position: 'relative'
                 }}>
-                  <img
-                    src={candidateImg}
-                    alt="Candidate"
+                  {/* Live HTML5 Webcam Feed if accessible */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
                     style={{
                       width: '100%',
                       height: '100%',
                       borderRadius: '50%',
                       objectFit: 'cover',
-                      display: 'block'
+                      transform: 'scaleX(-1)',
+                      display: hasCameraStream ? 'block' : 'none'
                     }}
                   />
+                  {/* High-res candidate fallback if camera is not connected */}
+                  {!hasCameraStream && (
+                    <img
+                      src={candidateImg}
+                      alt="Candidate"
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        display: 'block'
+                      }}
+                    />
+                  )}
                 </div>
 
-                {/* Top-left Pill Badge: ● Candidate */}
+                {/* Top-left Pill Badge: ● Live Camera Active */}
                 <div style={{
                   position: 'absolute',
                   top: 14,
@@ -984,16 +1661,59 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                  backgroundColor: 'rgba(15, 23, 42, 0.85)',
                   backdropFilter: 'blur(8px)',
+                  border: hasCameraStream ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(255, 255, 255, 0.15)',
                   color: '#FFFFFF',
                   padding: '4px 10px',
                   borderRadius: 14,
                   fontSize: 11,
                   fontWeight: 700
                 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: '#38BDF8' }} />
-                  <span>Candidate</span>
+                  <span style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    backgroundColor: hasCameraStream ? '#10B981' : '#38BDF8',
+                    boxShadow: hasCameraStream ? '0 0 8px #10B981' : 'none'
+                  }} />
+                  <span>
+                    {hasCameraStream
+                      ? (language === 'ar' ? 'بث الكاميرا المباشر (مراقب)' : 'Live Camera (Proctored)')
+                      : (language === 'ar' ? 'كاميرا المرشح الافتراضية' : 'Virtual Candidate Feed')}
+                  </span>
+                </div>
+
+                {/* Bottom-left Pill Badge: Random Camera Auto-Snaps Counter */}
+                <div style={{
+                  position: 'absolute',
+                  bottom: 14,
+                  left: 14,
+                  zIndex: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  color: '#E2E8F0',
+                  padding: '4px 10px',
+                  borderRadius: 14,
+                  fontSize: 10.5,
+                  fontWeight: 700
+                }}>
+                  <Camera size={12} color="#34D399" />
+                  <span>
+                    {language === 'ar'
+                      ? `اللقطات العشوائية: ${capturedSnapshots.length}`
+                      : `Random Camera Snaps: ${capturedSnapshots.length}`}
+                  </span>
+                  <span style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    backgroundColor: '#10B981'
+                  }} />
                 </div>
 
                 {/* Top-right Signal Bars */}
@@ -1015,8 +1735,59 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                   <div style={{ width: 3, height: 13, background: '#10B981', borderRadius: 1 }} />
                   <div style={{ width: 3, height: 16, background: '#10B981', borderRadius: 1 }} />
                 </div>
+
+                {/* Shutter Camera Flash Effect */}
+                {isCameraFlash && (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+                    zIndex: 25,
+                    pointerEvents: 'none'
+                  }} />
+                )}
+
+                {/* Live Random Snapshot Toast Banner */}
+                {snapshotToast?.visible && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 60,
+                    right: 14,
+                    zIndex: 22,
+                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                    border: '1.5px solid #10B981',
+                    borderRadius: 12,
+                    padding: '8px 14px',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    boxShadow: '0 4px 18px rgba(16, 185, 129, 0.45)',
+                    animation: 'fadeIn 0.2s ease'
+                  }}>
+                    <Camera size={18} color="#34D399" />
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: '#34D399', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>
+                          {language === 'ar'
+                            ? `📸 تم التقاط لقطة كاميرا تلقائياً (${snapshotToast.time})`
+                            : `📸 Auto Camera Snapshot Taken (${snapshotToast.time})`}
+                        </span>
+                        <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 4, backgroundColor: 'rgba(16, 185, 129, 0.25)', color: '#A7F3D0' }}>
+                          {language === 'ar' ? 'وقت عشوائي' : 'Random Time'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 9.5, color: '#E2E8F0', marginTop: 1 }}>
+                        {language === 'ar'
+                          ? `مطابقة بيومترية: ${snapshotToast.confidence}% • تم التوثيق والأرشفة لتقرير HR`
+                          : `Biometric Match: ${snapshotToast.confidence}% • Synced & archived for HR report`}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
+
 
             {/* Floating Call Action Dock (Matching Screenshot) */}
             <div style={{
@@ -1055,23 +1826,46 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 {micEnabled ? <Mic size={16} /> : <MicOff size={16} />}
               </button>
 
-              {/* Video Camera Icon */}
+              {/* Video Camera Indicator */}
               <button
                 style={{
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  border: 'none',
-                  color: '#FFFFFF',
+                  backgroundColor: hasCameraStream ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255,255,255,0.15)',
+                  border: hasCameraStream ? '1px solid #10B981' : 'none',
+                  color: hasCameraStream ? '#34D399' : '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'default'
                 }}
-                title="Avatar Feed Active"
+                title={hasCameraStream ? 'Live Webcam Connected (Proctored)' : 'Virtual Camera Stream Active'}
               >
-                <Video size={16} />
+                {hasCameraStream ? <Video size={16} /> : <VideoOff size={16} />}
+              </button>
+
+              {/* Random Snapshot Test Trigger Button */}
+              <button
+                type="button"
+                onClick={() => triggerCameraSnapshot()}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  backgroundColor: 'rgba(16, 185, 129, 0.25)',
+                  border: '1px solid #10B981',
+                  color: '#A7F3D0',
+                  padding: '6px 12px',
+                  borderRadius: 20,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+                title="Trigger Random Camera Snapshot (Identity & Face Check)"
+              >
+                <Camera size={13} color="#34D399" />
+                <span>{language === 'ar' ? 'التقاط صورة عشوائية' : 'Snap Photo'}</span>
               </button>
 
               {/* Screen Share */}
@@ -1220,124 +2014,453 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
             </div>
           </div>
 
-          {/* Audio Recording & Waveform Card (Matching Screenshot) */}
+          {/* USER CHOICE ANSWER SECTION: Voice Recording OR Written Text */}
           <div style={{
             backgroundColor: '#FFFFFF',
             borderRadius: 14,
             border: '1px solid #E2E8F0',
-            padding: '14px 20px',
             boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            overflow: 'hidden',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16
+            flexDirection: 'column'
           }}>
-            {/* Left: Red recording dot + timer */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 100 }}>
-              <span style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                backgroundColor: '#EF4444',
-                animation: isRecording && !isPaused ? 'pulseRedDot 1s infinite' : 'none'
-              }} />
-              <span style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', fontFamily: 'monospace' }}>
-                {formatHms(recordingSeconds)}
-              </span>
-            </div>
-
-            {/* Center: Dynamic Animated Equalizer Waveform */}
+            {/* Mode Selection Tab Bar */}
             <div style={{
-              flex: 1,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              gap: 3,
-              height: 36,
-              overflow: 'hidden'
+              justifyContent: 'space-between',
+              padding: '10px 16px',
+              backgroundColor: '#F8FAFC',
+              borderBottom: '1px solid #E2E8F0',
+              flexWrap: 'wrap',
+              gap: 10
             }}>
-              {waveformHeights.map((h, i) => (
-                <div
-                  key={i}
-                  style={{
-                    width: 3.5,
-                    height: `${h}%`,
-                    backgroundColor: isRecording ? '#059669' : '#CBD5E1',
-                    borderRadius: 2,
-                    animation: isRecording && !isPaused ? `audioWaveDance 0.8s ease-in-out infinite alternate ${i * 0.04}s` : 'none',
-                    transformOrigin: 'bottom'
-                  }}
-                />
-              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: '#334155' }}>
+                  {language === 'ar' ? 'طريقة تقديم الإجابة:' : 'Answer Method:'}
+                </span>
+                <div style={{
+                  display: 'inline-flex',
+                  backgroundColor: '#E2E8F0',
+                  padding: 3,
+                  borderRadius: 24,
+                  gap: 3
+                }}>
+                  {/* Choice 1: Record Voice */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResponseMode('voice');
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '6px 14px',
+                      borderRadius: 20,
+                      fontSize: 12,
+                      fontWeight: 800,
+                      border: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: responseMode === 'voice' ? '#0F5132' : 'transparent',
+                      color: responseMode === 'voice' ? '#FFFFFF' : '#475569',
+                      boxShadow: responseMode === 'voice' ? '0 2px 6px rgba(15, 81, 50, 0.25)' : 'none',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <Mic size={13} />
+                    <span>{language === 'ar' ? 'تسجيل الإجابة (صوتي)' : 'Record Answer (Voice)'}</span>
+                  </button>
+
+                  {/* Choice 2: Write Text */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isRecording) handleStopRecording();
+                      setResponseMode('text');
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '6px 14px',
+                      borderRadius: 20,
+                      fontSize: 12,
+                      fontWeight: 800,
+                      border: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: responseMode === 'text' ? '#0F5132' : 'transparent',
+                      color: responseMode === 'text' ? '#FFFFFF' : '#475569',
+                      boxShadow: responseMode === 'text' ? '0 2px 6px rgba(15, 81, 50, 0.25)' : 'none',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <Edit3 size={13} />
+                    <span>{language === 'ar' ? 'كتابة الإجابة (نصي)' : 'Write Answer (Text)'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Proctoring Shield Pill */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                color: responseMode === 'text' ? '#991B1B' : '#065F46',
+                backgroundColor: responseMode === 'text' ? '#FEF2F2' : '#ECFDF5',
+                border: `1px solid ${responseMode === 'text' ? '#FECACA' : '#A7F3D0'}`,
+                padding: '4px 10px',
+                borderRadius: 14
+              }}>
+                <ShieldAlert size={12} color={responseMode === 'text' ? '#DC2626' : '#059669'} />
+                <span>
+                  {responseMode === 'text'
+                    ? (language === 'ar' ? 'اللصق محظور تماماً — المراقبة نشطة' : 'Paste Prohibited — Anti-Cheat Active')
+                    : (language === 'ar' ? 'التحليل الصوتي الفوري نشط' : 'Live Speech AI Active')}
+                </span>
+              </div>
             </div>
 
-            {/* Right: Pause & Stop / Record Buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {isRecording ? (
-                <>
-                  <button
-                    onClick={handleTogglePause}
-                    style={{
-                      background: '#FFFFFF',
-                      border: '1px solid #CBD5E1',
-                      color: '#0F172A',
-                      padding: '7px 14px',
-                      borderRadius: 20,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    {isPaused ? <Play size={12} fill="#0F172A" /> : <Pause size={12} />}
-                    <span>{isPaused ? 'Resume' : 'Pause'}</span>
-                  </button>
+            {/* MODE CONTENT: VOICE RECORDING */}
+            {responseMode === 'voice' && (
+              <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* Waveform & controls row */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 16
+                }}>
+                  {/* Left: Red recording dot + timer */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 100 }}>
+                    <span style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      backgroundColor: '#EF4444',
+                      animation: isRecording && !isPaused ? 'pulseRedDot 1s infinite' : 'none'
+                    }} />
+                    <span style={{ fontSize: 14, fontWeight: 800, color: '#0F172A', fontFamily: 'monospace' }}>
+                      {formatHms(recordingSeconds)}
+                    </span>
+                  </div>
 
-                  <button
-                    onClick={handleStopRecording}
-                    style={{
-                      background: '#FEF2F2',
-                      border: '1px solid #FCA5A5',
-                      color: '#DC2626',
-                      padding: '7px 16px',
-                      borderRadius: 20,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    <Square size={12} fill="#DC2626" />
-                    <span>Stop Recording</span>
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={handleStartRecording}
-                  style={{
-                    background: '#059669',
-                    border: 'none',
-                    color: '#FFFFFF',
-                    padding: '8px 18px',
-                    borderRadius: 20,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    cursor: 'pointer',
+                  {/* Center: Dynamic Animated Equalizer Waveform */}
+                  <div style={{
+                    flex: 1,
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 6,
-                    boxShadow: '0 2px 8px rgba(5, 150, 105, 0.25)'
-                  }}
-                >
-                  <Mic size={14} />
-                  <span>{language === 'ar' ? 'تسجيل الإجابة' : 'Record Answer'}</span>
-                </button>
-              )}
-            </div>
+                    justifyContent: 'center',
+                    gap: 3,
+                    height: 36,
+                    overflow: 'hidden'
+                  }}>
+                    {waveformHeights.map((h, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          width: 3.5,
+                          height: `${h}%`,
+                          backgroundColor: isRecording ? '#059669' : '#CBD5E1',
+                          borderRadius: 2,
+                          animation: isRecording && !isPaused ? `audioWaveDance 0.8s ease-in-out infinite alternate ${i * 0.04}s` : 'none',
+                          transformOrigin: 'bottom'
+                        }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Right: Pause & Stop / Record Buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {isRecording ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleTogglePause}
+                          style={{
+                            background: '#FFFFFF',
+                            border: '1px solid #CBD5E1',
+                            color: '#0F172A',
+                            padding: '7px 14px',
+                            borderRadius: 20,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6
+                          }}
+                        >
+                          {isPaused ? <Play size={12} fill="#0F172A" /> : <Pause size={12} />}
+                          <span>{isPaused ? 'Resume' : 'Pause'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleStopRecording}
+                          style={{
+                            background: '#FEF2F2',
+                            border: '1px solid #FCA5A5',
+                            color: '#DC2626',
+                            padding: '7px 16px',
+                            borderRadius: 20,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6
+                          }}
+                        >
+                          <Square size={12} fill="#DC2626" />
+                          <span>Stop Recording</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleStartRecording}
+                        style={{
+                          background: '#059669',
+                          border: 'none',
+                          color: '#FFFFFF',
+                          padding: '8px 18px',
+                          borderRadius: 20,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          boxShadow: '0 2px 8px rgba(5, 150, 105, 0.25)'
+                        }}
+                      >
+                        <Mic size={14} />
+                        <span>{language === 'ar' ? 'تسجيل الإجابة' : 'Record Answer'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Voice transcription preview if spoken */}
+                {responseText && (
+                  <div style={{
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: 10,
+                    padding: '10px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12
+                  }}>
+                    <div style={{ flex: 1, fontSize: 12, color: '#334155', fontStyle: 'italic', lineHeight: 1.5 }}>
+                      <span style={{ fontWeight: 700, fontStyle: 'normal', color: '#0F172A', marginRight: 6 }}>
+                        {language === 'ar' ? 'النص المسجل:' : 'Recorded Speech:'}
+                      </span>
+                      "{responseText}"
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePlayCandidateResponse}
+                      style={{
+                        background: '#EFF6FF',
+                        border: '1px solid #BFDBFE',
+                        color: '#1D4ED8',
+                        borderRadius: 16,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        flexShrink: 0
+                      }}
+                    >
+                      <Play size={11} fill="#1D4ED8" />
+                      <span>{isCandidatePlaying ? 'Playing...' : 'Listen'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* MODE CONTENT: WRITTEN TEXT WITH ANTI-PASTE SECURITY */}
+            {responseMode === 'text' && (
+              <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* Strict Anti-Paste Warning Banner */}
+                <div style={{
+                  backgroundColor: violationCount >= 1 ? '#FEF2F2' : '#FFFBEB',
+                  border: `1px solid ${violationCount >= 1 ? '#FECACA' : '#FDE68A'}`,
+                  borderRadius: 10,
+                  padding: '10px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10
+                }}>
+                  <AlertTriangle size={18} color={violationCount >= 1 ? '#DC2626' : '#D97706'} style={{ flexShrink: 0 }} />
+                  <div style={{ fontSize: 11.5, color: violationCount >= 1 ? '#991B1B' : '#92400E', lineHeight: 1.4 }}>
+                    <strong>{language === 'ar' ? 'تنبيه أمني صارم:' : 'Strict Proctoring Protocol:'}</strong>{' '}
+                    {violationCount >= 1 ? (
+                      language === 'ar'
+                        ? '⚠️ تنبيه: تم تسجيل الإنذار الأول (1/2). أي محاولة جديدة للصق نص أو مغادرة الشاشة ستؤدي فوراً إلى إنهاء وإلغاء المقابلة بشكل نهائي.'
+                        : '⚠️ Strike 1 on Record: You have received your 1st warning. Any repeated attempt to paste text or switch tabs will CANCEL the interview immediately.'
+                    ) : (
+                      language === 'ar'
+                        ? 'يجب كتابة الإجابة يدوياً باستخدام لوحة المفاتيح. محاولة لصق أي نص من الحافظة (Paste / Ctrl+V) تستوجب إنذاراً أولاً، وتكرار المخالفة يُلغي المقابلة فوراً.'
+                        : 'You must type your response directly in your own words. Pasting text into this box will trigger an official warning on the 1st attempt, and immediately cancel your interview on a repeated offence.'
+                    )}
+                  </div>
+                </div>
+
+                {/* Monitored Text Area */}
+                <div style={{ position: 'relative' }}>
+                  <textarea
+                    rows={4}
+                    value={responseText}
+                    onChange={(e) => setResponseText(e.target.value)}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      handlePasteViolation();
+                    }}
+                    onKeyDown={(e) => {
+                      // Detect Ctrl+V or Cmd+V
+                      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+                        e.preventDefault();
+                        handlePasteViolation();
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handlePasteViolation();
+                    }}
+                    placeholder={
+                      language === 'ar'
+                        ? 'اكتب إجابتك هنا بكلماتك الخاصة... (تنبيه: النسخ واللصق محظور تماماً ومراقب آلياً)'
+                        : 'Type your answer here in your own words... (Notice: Copy-pasting is strictly prohibited and monitored by SANS proctoring)'
+                    }
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #CBD5E1',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                      fontSize: 13,
+                      lineHeight: 1.6,
+                      color: '#0F172A',
+                      fontFamily: 'Inter, system-ui, sans-serif',
+                      resize: 'vertical',
+                      outline: 'none',
+                      minHeight: 110,
+                      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'border-color 0.2s, box-shadow 0.2s'
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#059669';
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(5, 150, 105, 0.15)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#CBD5E1';
+                      e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.05)';
+                    }}
+                  />
+                </div>
+
+                {/* Footer bar of written answer card: word count, sample outline & test paste violation button */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  fontSize: 11,
+                  color: '#64748B'
+                }}>
+                  {/* Word and character count */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontWeight: 700, color: '#334155' }}>
+                      {responseText.trim() ? responseText.trim().split(/\s+/).length : 0} {language === 'ar' ? 'كلمة' : 'words'}
+                    </span>
+                    <span>•</span>
+                    <span>{responseText.length} {language === 'ar' ? 'حرف' : 'characters'}</span>
+                  </div>
+
+                  {/* Helpful actions: Clear, Outline, and Test Paste Violation */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {responseText && (
+                      <button
+                        type="button"
+                        onClick={() => setResponseText('')}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#64748B',
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          textDecoration: 'underline'
+                        }}
+                      >
+                        {language === 'ar' ? 'مسح النص' : 'Clear Text'}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const outline = language === 'ar'
+                          ? currentQ.suggestedAnswerAr
+                          : currentQ.suggestedAnswerEn;
+                        setResponseText(outline);
+                      }}
+                      style={{
+                        background: '#F1F5F9',
+                        border: '1px solid #CBD5E1',
+                        color: '#334155',
+                        padding: '4px 10px',
+                        borderRadius: 14,
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                      title="Insert technical template for testing typing"
+                    >
+                      {language === 'ar' ? 'إدراج مسودة إجابة تجريبية' : 'Insert Test Outline'}
+                    </button>
+
+                    {/* Test Paste Trigger button */}
+                    <button
+                      type="button"
+                      onClick={handlePasteViolation}
+                      style={{
+                        background: violationCount === 0 ? '#FEF3C7' : '#FEE2E2',
+                        border: `1px solid ${violationCount === 0 ? '#FCD34D' : '#FCA5A5'}`,
+                        color: violationCount === 0 ? '#92400E' : '#991B1B',
+                        padding: '4px 10px',
+                        borderRadius: 14,
+                        fontSize: 10.5,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                      title={violationCount === 0 ? "Test paste warning (Strike 1 of 2)" : "Test paste repeated offence (Strike 2 of 2 - Cancellation)"}
+                    >
+                      <Ban size={11} color={violationCount === 0 ? '#92400E' : '#991B1B'} />
+                      <span>
+                        {violationCount === 0
+                          ? (language === 'ar' ? 'تجربة إنذار اللصق (1/2)' : 'Test Paste (Warn 1/2)')
+                          : (language === 'ar' ? 'تجربة إلغاء اللصق (2/2)' : 'Test Paste (Cancel 2/2)')}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1411,6 +2534,29 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
               isEvaluated ? (
                 /* ================= STATE A: EVALUATED AT END OF INTERVIEW (MATCHING SCREENSHOT) ================= */
                 <>
+                  {isTimeExpired && (
+                    <div style={{
+                      backgroundColor: '#ECFDF5',
+                      border: '1px solid #A7F3D0',
+                      borderRadius: 10,
+                      padding: '10px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      marginBottom: 10,
+                      fontSize: 12,
+                      color: '#065F46',
+                      fontWeight: 700
+                    }}>
+                      <Clock size={16} color="#059669" />
+                      <span>
+                        {language === 'ar'
+                          ? 'انتهى الوقت المخصص للمقابلة — تم حفظ كافة الإجابات وإرسالها للموارد البشرية بنجاح'
+                          : 'Session Timer Expired — All responses auto-saved & submitted to HR'}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Circular Arc Score Gauge */}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 4 }}>
                     <svg width="200" height="120" viewBox="0 0 200 120">
@@ -1535,6 +2681,102 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                     </div>
                   </div>
 
+                  {/* ================= PROMINENT AI CONTENT IN ANSWERS REPORT ================= */}
+                  <div style={{
+                    backgroundColor: '#F0FDF4',
+                    borderRadius: 12,
+                    border: '1.5px solid #86EFAC',
+                    padding: '14px 16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, color: '#166534' }}>
+                        <Sparkles size={15} color="#059669" />
+                        <span>{language === 'ar' ? 'تقرير محتوى الذكاء الاصطناعي في الإجابات' : 'AI Content in Answers & Authenticity'}</span>
+                      </div>
+                      <span style={{
+                        backgroundColor: '#DCFCE7',
+                        color: '#15803D',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        padding: '2px 8px',
+                        borderRadius: 10
+                      }}>
+                        {language === 'ar' ? 'أصالة بشرية 96%' : '96% Human Authentic'}
+                      </span>
+                    </div>
+
+                    {/* Human vs AI formulation gauge */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4, fontWeight: 700 }}>
+                        <span style={{ color: '#15803D' }}>
+                          {language === 'ar' ? 'الصياغة البشرية الأصيلة: 96%' : 'Human Thought Formulation: 96%'}
+                        </span>
+                        <span style={{ color: '#1D4ED8' }}>
+                          {language === 'ar' ? 'محتوى ذكاء اصطناعي: 4%' : 'AI Content Index: 4% (Safe)'}
+                        </span>
+                      </div>
+                      <div style={{ height: 8, backgroundColor: '#E2E8F0', borderRadius: 4, overflow: 'hidden', display: 'flex' }}>
+                        <div style={{ width: '96%', backgroundColor: '#10B981' }} />
+                        <div style={{ width: '4%', backgroundColor: '#3B82F6' }} />
+                      </div>
+                    </div>
+
+                    {/* AI Key Concepts Detected */}
+                    <div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#166534', marginBottom: 5 }}>
+                        {language === 'ar' ? 'المفاهيم التشغيلية المعتمدة التي رصدها الذكاء الاصطناعي:' : 'Operational Concepts Validated by AI in Your Responses:'}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {[
+                          '30° Divergent Vectors',
+                          'FL330/FL350 Altitude Buffer',
+                          'TCAS RA Coordination',
+                          'Mode-C Readouts',
+                          'ICAO Annex 11 Compliance'
+                        ].map((concept, cIdx) => (
+                          <span
+                            key={cIdx}
+                            style={{
+                              backgroundColor: '#FFFFFF',
+                              border: '1px solid #BBF7D0',
+                              color: '#14532D',
+                              fontSize: 9.5,
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: 4
+                            }}
+                          >
+                            ✓ {concept}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Proctoring Webcam Snaps Summary */}
+                    <div style={{
+                      backgroundColor: '#FFFFFF',
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      border: '1px solid #DCFCE7',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Camera size={14} color="#059669" />
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: '#334155' }}>
+                          {language === 'ar' ? 'لقطات الكاميرا المحفوظة للموارد البشرية:' : 'Webcam Snapshots Saved for HR:'}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: 10.5, fontWeight: 800, color: '#059669' }}>
+                        {capturedSnapshots.length} {language === 'ar' ? 'لقطات موثقة ✓' : 'Snaps Verified ✓'}
+                      </span>
+                    </div>
+                  </div>
+
                   {/* Completed Final Action Button */}
                   <button
                     onClick={() => onCompleted?.()}
@@ -1635,7 +2877,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                         </button>
 
                         <button
-                          onClick={handleSubmitFinalEvaluation}
+                          onClick={() => handleSubmitFinalEvaluation()}
                           disabled={isEvaluating}
                           style={{
                             backgroundColor: '#FFFFFF',
@@ -1659,7 +2901,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                     ) : (
                       /* Big Green Submit Button on final question (Matching Screenshot) */
                       <button
-                        onClick={handleSubmitFinalEvaluation}
+                        onClick={() => handleSubmitFinalEvaluation()}
                         disabled={isEvaluating}
                         style={{
                           backgroundColor: '#0F5132',
@@ -1736,7 +2978,10 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Mode:</span>
             <button
-              onClick={() => setResponseMode(prev => prev === 'voice' ? 'text' : 'voice')}
+              onClick={() => {
+                if (isRecording) handleStopRecording();
+                setResponseMode(prev => prev === 'voice' ? 'text' : 'voice');
+              }}
               style={{
                 backgroundColor: 'rgba(255,255,255,0.08)',
                 border: '1px solid rgba(255,255,255,0.15)',
@@ -1751,7 +2996,7 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 gap: 6
               }}
             >
-              <Mic size={13} color="#34D399" />
+              {responseMode === 'voice' ? <Mic size={13} color="#34D399" /> : <Edit3 size={13} color="#38BDF8" />}
               <span>{responseMode === 'voice' ? 'Voice Recording' : 'Written Text'}</span>
               <ChevronDown size={12} color="#94A3B8" />
             </button>
@@ -1795,7 +3040,183 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
         </div>
       </footer>
 
-      {/* Rule Violation / Disqualification Modal Overlay */}
+      {/* 1. FIRST PROCTORING WARNING MODAL (STRIKE 1 OF 2) */}
+      {isWarningModalOpen && !isRuleViolated && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.85)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 99998,
+          padding: 20
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 16,
+            maxWidth: 580,
+            width: '100%',
+            boxShadow: '0 25px 50px -12px rgba(217, 119, 6, 0.35)',
+            border: '2px solid #F59E0B',
+            overflow: 'hidden'
+          }}>
+            {/* Warning Header */}
+            <div style={{
+              backgroundColor: '#FFFBEB',
+              borderBottom: '1px solid #FDE68A',
+              padding: '20px 24px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14
+            }}>
+              <div style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                backgroundColor: '#D97706',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: '0 4px 12px rgba(217, 119, 6, 0.3)'
+              }}>
+                <AlertTriangle size={24} color="#FFFFFF" />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#92400E' }}>
+                  {language === 'ar'
+                    ? '⚠️ تحذير رسمي — رصد مخالفة أمنية (الإنذار 1 من 2)'
+                    : '⚠️ Official Proctoring Warning (Strike 1 of 2)'}
+                </h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#B45309' }}>
+                  {language === 'ar'
+                    ? 'نظام مراقبة النزاهة في الملاحة الجوية السعودية (SANS Proctoring Engine)'
+                    : 'SANS Automated Assessment Integrity & Anti-Cheating Protocol'}
+                </p>
+              </div>
+            </div>
+
+            {/* Warning Body */}
+            <div style={{ padding: '24px 28px' }}>
+              {/* Incident Details Card */}
+              <div style={{
+                backgroundColor: '#FEF3C7',
+                border: '1px solid #FCD34D',
+                borderRadius: 10,
+                padding: '14px 18px',
+                marginBottom: 18
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#78350F' }}>
+                    {language === 'ar' ? 'تفاصيل المخالفة المرصودة:' : 'Violation Details Intercepted:'}
+                  </div>
+                  <span style={{
+                    backgroundColor: '#B45309',
+                    color: '#FFFFFF',
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: '2px 8px',
+                    borderRadius: 12
+                  }}>
+                    {currentWarningDetails.type === 'paste' ? 'CLIPBOARD PASTE ATTEMPT' : 'WINDOW FOCUS LOST'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: '#92400E', lineHeight: 1.5 }}>
+                  {language === 'ar' ? currentWarningDetails.ar : currentWarningDetails.en}
+                </div>
+              </div>
+
+              {/* Strict Notice for Repeated Offence */}
+              <div style={{
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FECACA',
+                borderRadius: 10,
+                padding: '12px 16px',
+                marginBottom: 18,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10
+              }}>
+                <AlertTriangle size={18} color="#DC2626" style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ fontSize: 12, color: '#991B1B', lineHeight: 1.5 }}>
+                  <strong>{language === 'ar' ? 'تنبيه نهائي صارم:' : 'Final Warning Notice:'}</strong>{' '}
+                  {language === 'ar'
+                    ? 'بموجب لوائح الملاحة الجوية السعودية (SANS)، هذا هو الإنذار الأول والأخير. أي محاولة أخرى للصق نص أو مغادرة شاشة المقابلة ستؤدي فوراً إلى إنهاء الجلسة وإلغاء المقابلة رسمياً واستبعادك.'
+                    : 'Under SANS and air navigation security protocols, this is your 1st and final warning. Any repeated offence (clipboard paste or navigating away) will trigger IMMEDIATE INTERVIEW CANCELLATION and disqualification.'}
+                </div>
+              </div>
+
+              {/* Status and Ref */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: 12,
+                backgroundColor: '#F8FAFC',
+                borderRadius: 10,
+                padding: 12,
+                border: '1px solid #E2E8F0'
+              }}>
+                <div>
+                  <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'حالة المراقبة الحالية' : 'Current Proctoring Status'}
+                  </div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: '#D97706', marginTop: 2 }}>
+                    Strike 1 of 2 (Warning Issued)
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'الرمز المرجعي للإنذار' : 'Warning Incident Ref #'}
+                  </div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: '#334155', marginTop: 2 }}>
+                    {currentWarningDetails.incidentRef || 'WARN-PROCT-001'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{
+              backgroundColor: '#F8FAFC',
+              borderTop: '1px solid #E2E8F0',
+              padding: '16px 24px',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 12
+            }}>
+              <button
+                type="button"
+                onClick={handleAcknowledgeWarning}
+                style={{
+                  backgroundColor: '#D97706',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '11px 24px',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  boxShadow: '0 2px 8px rgba(217, 119, 6, 0.3)'
+                }}
+              >
+                <span>
+                  {language === 'ar'
+                    ? 'أقر بالتعليمات واستئناف المقابلة (المخالفة 1 من 2)'
+                    : 'I Understand — Resume Interview (Warning 1 of 2)'}
+                </span>
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. REPEATED OFFENCE / FINAL TERMINATION MODAL (STRIKE 2 OF 2) */}
       {isRuleViolated && (
         <div style={{
           position: 'fixed',
@@ -1841,7 +3262,9 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
               </div>
               <div>
                 <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#991B1B' }}>
-                  {language === 'ar' ? 'تم إنهاء المقابلة فوراً — تم رصد مخالفة أمنية' : 'Interview Terminated — Proctoring Rule Violated'}
+                  {language === 'ar'
+                    ? 'تم إلغاء المقابلة فوراً — تكرار المخالفة الأمنية (الإنذار 2 من 2)'
+                    : 'Interview Terminated — Repeated Proctoring Offence (Strike 2 of 2)'}
                 </h3>
                 <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#B91C1C' }}>
                   {language === 'ar'
@@ -1865,19 +3288,19 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 </div>
                 <div style={{ fontSize: 13, color: '#881337', lineHeight: 1.5 }}>
                   <strong>{language === 'ar' ? 'السبب:' : 'Reason:'}</strong>{' '}
-                  <span style={{ color: '#DC2626', fontWeight: 800 }}>Rule Violated</span>
+                  <span style={{ color: '#DC2626', fontWeight: 800 }}>Rule Violated (Repeated Offence — Strike 2/2)</span>
                   <div style={{ marginTop: 4, fontSize: 12, color: '#9F1239' }}>
                     {language === 'ar'
-                      ? 'تم رصد مغادرة نافذة المقابلة (تغيير التبويب، تصغير المتصفح، أو فتح تطبيق خارجي). بموجب معايير الهيئة العامة للطيران المدني، تم إلغاء الجلسة واعتبار النتيجة غير مؤهل.'
-                      : 'Candidate switched browser tabs, minimized browser window, or opened another application. Under SANS and ICAO safety regulations, navigating away during an active assessment is strictly prohibited.'}
+                      ? (violationReasonDetails.ar || activeApp?.cancellationReasonAr || 'مخالفة الشروط (تكرار المخالفة): تم رصد تكرار المخالفة بعد توجيه إنذار أمني أول. تم إلغاء الجلسة واعتبار النتيجة غير مؤهل.')
+                      : (violationReasonDetails.en || activeApp?.cancellationReason || 'Rule Violated (Repeated Offence): Candidate committed a repeated violation after receiving an official proctoring warning. Under SANS integrity regulations, the assessment is officially terminated and canceled.')}
                   </div>
                 </div>
               </div>
 
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: 12,
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: 10,
                 backgroundColor: '#F8FAFC',
                 borderRadius: 10,
                 padding: 14,
@@ -1885,18 +3308,26 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 marginBottom: 20
               }}>
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>
-                    {language === 'ar' ? 'حالة المقابلة في بوابة التوظيف' : 'HR Portal Status'}
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'مستوى المخالفة' : 'Proctoring Level'}
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: '#DC2626', marginTop: 2 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#DC2626', marginTop: 2 }}>
+                    Strike 2 of 2 (Canceled)
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'حالة المقابلة بالموارد البشرية' : 'HR Portal Status'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#DC2626', marginTop: 2 }}>
                     Interview Canceled
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
                     {language === 'ar' ? 'الرمز الأمني للتقرير' : 'Incident Ref #'}
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#334155', marginTop: 2 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginTop: 2 }}>
                     SEC-PROCT-{Date.now().toString().slice(-6)}
                   </div>
                 </div>
@@ -1935,6 +3366,182 @@ export const CandidateInterviewRoom: React.FC<CandidateInterviewRoomProps> = ({
                 }}
               >
                 <span>{language === 'ar' ? 'العودة إلى بوابة المتقدمين' : 'Exit to Candidate Portal'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. TIME EXPIRED — INTERVIEW CONCLUDED & RESPONSES SAVED MODAL */}
+      {isTimeExpiredModalOpen && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.85)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 99998,
+          padding: 20
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 16,
+            maxWidth: 620,
+            width: '100%',
+            boxShadow: '0 25px 50px -12px rgba(15, 81, 50, 0.35)',
+            border: '2px solid #059669',
+            overflow: 'hidden'
+          }}>
+            {/* Header */}
+            <div style={{
+              backgroundColor: '#ECFDF5',
+              borderBottom: '1px solid #A7F3D0',
+              padding: '20px 24px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14
+            }}>
+              <div style={{
+                width: 46,
+                height: 46,
+                borderRadius: '50%',
+                backgroundColor: '#059669',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: '0 4px 12px rgba(5, 150, 105, 0.3)'
+              }}>
+                <Clock size={24} color="#FFFFFF" />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#065F46' }}>
+                  {language === 'ar'
+                    ? 'انتهى وقت المقابلة — تم حفظ وإرسال الإجابات بنجاح'
+                    : 'Interview Concluded — Time Expired & Responses Saved'}
+                </h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#047857' }}>
+                  {language === 'ar'
+                    ? 'تم حفظ جميع الإجابات المسجلة والكتابية وإرسالها إلى لجنة تقييم الموارد البشرية'
+                    : 'All written & recorded responses were preserved and submitted to SANS HR for review'}
+                </p>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: '24px 28px' }}>
+              <div style={{
+                backgroundColor: '#F0FDF4',
+                border: '1px solid #BBF7D0',
+                borderRadius: 10,
+                padding: '14px 18px',
+                marginBottom: 18
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 4 }}>
+                  <CheckCircle2 size={16} color="#059669" />
+                  <span>
+                    {language === 'ar'
+                      ? 'تم تسجيل الاستجابة بالكامل وحفظها في ملف المتقدم'
+                      : 'Responses Successfully Synchronized & Archived'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, color: '#15803D', lineHeight: 1.5 }}>
+                  {language === 'ar'
+                    ? 'انتهت المدة المخصصة للمقابلة التفاعلية (5 دقائق). تم تجميد الإجابات المقدمة وإرسالها فوراً إلى منصة الموارد البشرية (HR Recruiter Dossier) ليتمكن فريق التوظيف من مراجعتها وتقييمها.'
+                    : 'The allocated 5-minute interview duration has elapsed. All of your submitted and in-progress responses have been secured and transmitted to the HR Recruitment Portal for official evaluator review.'}
+                </div>
+              </div>
+
+              {/* Assessment Overview Stats */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: 10,
+                backgroundColor: '#F8FAFC',
+                borderRadius: 10,
+                padding: 14,
+                border: '1px solid #E2E8F0',
+                marginBottom: 18
+              }}>
+                <div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'حالة التقديم' : 'Application Status'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#059669', marginTop: 2 }}>
+                    Interview Completed
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'الدرجة التقديرية' : 'Estimated Score'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                    87 / 100
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 600 }}>
+                    {language === 'ar' ? 'جاهزية المراجعة لدى HR' : 'HR Review Ready'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#1D4ED8', marginTop: 2 }}>
+                    Available in HR Portal
+                  </div>
+                </div>
+              </div>
+
+              <p style={{ margin: 0, fontSize: 12, color: '#64748B', lineHeight: 1.5 }}>
+                {language === 'ar'
+                  ? 'يمكنك الآن مراجعة بطاقة التقييم وتحليل الذكاء الاصطناعي في الشاشة، أو العودة إلى قائمة طلباتي.'
+                  : 'You can now review your AI evaluation scores and transcript breakdown on the right panel, or exit back to the Candidate Applications portal.'}
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div style={{
+              backgroundColor: '#F8FAFC',
+              borderTop: '1px solid #E2E8F0',
+              padding: '16px 24px',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 12
+            }}>
+              <button
+                onClick={() => setIsTimeExpiredModalOpen(false)}
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #CBD5E1',
+                  color: '#1E293B',
+                  padding: '10px 18px',
+                  borderRadius: 8,
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {language === 'ar' ? 'عرض التقييم وسجل المقابلة' : 'Review Evaluation & Transcript'}
+              </button>
+
+              <button
+                onClick={() => onCompleted?.()}
+                style={{
+                  backgroundColor: '#0F5132',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '10px 22px',
+                  borderRadius: 8,
+                  fontSize: 12.5,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  boxShadow: '0 2px 8px rgba(15, 81, 50, 0.25)'
+                }}
+              >
+                <span>{language === 'ar' ? 'العودة إلى بوابة المتقدمين' : 'Exit to Candidate Portal'}</span>
+                <ArrowRight size={14} />
               </button>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Candidate, EvaluationWeights, JobRequisition, AuditLog, CandidateApplication, InterviewQuestionItem } from '../types';
+import { Candidate, EvaluationWeights, JobRequisition, AuditLog, CandidateApplication, InterviewQuestionItem, ProctoringSnapshot } from '../types';
 import { INITIAL_CANDIDATES } from '../data/candidates';
 import { REQUISITIONS } from '../data/requisitions';
 import { INITIAL_AUDIT_LOGS } from '../data/auditLogs';
@@ -35,8 +35,22 @@ interface CandidateContextType {
   bulkScanCandidateCvs: (targetAppIds?: string[]) => { scannedCount: number; averageScore: number };
   bulkApproveShortlists: (targetAppIds?: string[]) => { approvedCount: number };
   approveShortlistForInterview: (appId: string) => void;
-  recordCandidateInterviewResponse: (appId: string, transcriptData: { question: string; answer: string; score: number; feedbackEn?: string; feedbackAr?: string; hasAudioVoice?: boolean }) => void;
+  recordCandidateInterviewResponse: (
+    appId: string,
+    transcriptData: {
+      question: string;
+      answer: string;
+      score: number;
+      feedbackEn?: string;
+      feedbackAr?: string;
+      hasAudioVoice?: boolean;
+      snapshots?: ProctoringSnapshot[];
+      aiContentScore?: number;
+      humanAuthenticityScore?: number;
+    }
+  ) => void;
   cancelInterviewDueToRuleViolation: (appId: string, violationDetails?: { en?: string; ar?: string }) => void;
+  issueProctoringWarning: (appId: string, warningDetails?: { en?: string; ar?: string }) => void;
   approveFinalSelection: (appId: string) => void;
   bulkApproveFinalSelection: (appIds: string[]) => void;
   activeInterviewApp: CandidateApplication | null;
@@ -644,8 +658,17 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       feedbackEn?: string;
       feedbackAr?: string;
       hasAudioVoice?: boolean;
+      snapshots?: ProctoringSnapshot[];
+      aiContentScore?: number;
+      humanAuthenticityScore?: number;
     }
   ) => {
+    const snapshots = transcriptData.snapshots && transcriptData.snapshots.length > 0
+      ? transcriptData.snapshots
+      : [];
+    const aiContentScore = transcriptData.aiContentScore ?? 4;
+    const humanAuthenticityScore = transcriptData.humanAuthenticityScore ?? 96;
+
     setApplications(prev =>
       prev.map(app => {
         if (app.id === appId) {
@@ -659,6 +682,9 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               answer: transcriptData.answer
             },
             hasAudioVoice: transcriptData.hasAudioVoice ?? true,
+            proctoringSnapshots: snapshots,
+            aiContentScore,
+            humanAuthenticityScore,
             status: 'Interview Completed' as CandidateApplication['status'],
             stageIndex: 3
           };
@@ -679,6 +705,9 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             virtualInterviewScore: transcriptData.score,
             interviewCompleted: true,
             hasAudioVoice: transcriptData.hasAudioVoice ?? true,
+            proctoringSnapshots: snapshots,
+            aiContentScore,
+            humanAuthenticityScore,
             interviewTranscript: {
               ...c.interviewTranscript,
               question: transcriptData.question,
@@ -695,10 +724,10 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       actor: 'Mohammad Al-Zahrani',
       actorAr: 'محمد الزهراني',
       role: 'Candidate',
-      event: `Virtual AI Interview Completed (Score: ${transcriptData.score}/100, Audio Response Recorded)`,
-      eventAr: `إتمام المقابلة الذكية التفاعلية (الدرجة: ${transcriptData.score}/100 وتسجيل الصوت)`,
+      event: `Virtual AI Interview Completed (Score: ${transcriptData.score}/100, AI Content: ${aiContentScore}% Authentic, ${snapshots.length} Random Webcam Snapshots Verified)`,
+      eventAr: `إتمام المقابلة الذكية التفاعلية (الدرجة: ${transcriptData.score}/100، نسبة المحتوى الاصطناعي: ${aiContentScore}% أصيل، ${snapshots.length} لقطات أمنية موثقة)`,
       subjectCandidate: 'Mohammad Al-Zahrani',
-      ncaControlRef: 'PDPL-Art-18 (Biometric / Voice Processing)',
+      ncaControlRef: 'PDPL-Art-18 (Biometric / Face Snaps Processing)',
       status: 'Verified'
     });
   };
@@ -762,6 +791,48 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       event: `Interview Terminated & Canceled — Integrity Rule Violated: Window/Tab switch detected (${appId})`,
       eventAr: `إنهاء وإلغاء المقابلة فورياً — مخالفة قواعد النزاهة: رصد مغادرة النافذة أو تبديل التطبيقات (${appId})`,
       subjectCandidate: violatedCandidateName,
+      ncaControlRef: 'NCA-ECC-2-1-3 (Session Proctoring & Integrity)',
+      status: 'Signed'
+    });
+  };
+
+  const issueProctoringWarning = (
+    appId: string,
+    warningDetails?: { en?: string; ar?: string }
+  ) => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) + ' AST';
+    const reasonEn = warningDetails?.en || 'Proctoring Warning (Strike 1 of 2): Initial integrity violation detected. Repeated offence will cancel interview.';
+    const reasonAr = warningDetails?.ar || 'إنذار أمني أولي (المخالفة 1 من 2): تم رصد مخالفة أمنية. تكرار المخالفة سيؤدي لإلغاء المقابلة فوراً.';
+
+    let candidateName = 'Mohammad Al-Zahrani';
+
+    setApplications(prev =>
+      prev.map(app => {
+        if (app.id === appId) {
+          if (app.candidateName) candidateName = app.candidateName;
+          const updated: CandidateApplication = {
+            ...app,
+            warningCount: (app.warningCount || 0) + 1,
+            lastWarningReason: reasonEn,
+            lastWarningReasonAr: reasonAr,
+            lastWarningTimestamp: timestamp
+          };
+          if (activeInterviewApp && activeInterviewApp.id === appId) {
+            setActiveInterviewApp(updated);
+          }
+          return updated;
+        }
+        return app;
+      })
+    );
+
+    addAuditLog({
+      actor: 'SANS Proctoring Engine',
+      actorAr: 'نظام مراقبة ونزاهة الاختبارات SANS',
+      role: 'Compliance AI',
+      event: `First Proctoring Warning Issued (Strike 1 of 2): ${reasonEn}`,
+      eventAr: `تسجيل إنذار أمني رسمي أول (المخالفة 1 من 2): ${reasonAr}`,
+      subjectCandidate: candidateName,
       ncaControlRef: 'NCA-ECC-2-1-3 (Session Proctoring & Integrity)',
       status: 'Signed'
     });
@@ -931,6 +1002,7 @@ export const CandidateProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       approveShortlistForInterview,
       recordCandidateInterviewResponse,
       cancelInterviewDueToRuleViolation,
+      issueProctoringWarning,
       approveFinalSelection,
       bulkApproveFinalSelection,
       activeInterviewApp,
