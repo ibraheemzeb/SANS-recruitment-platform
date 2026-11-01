@@ -16,7 +16,8 @@ import {
   MapPin,
   Fingerprint,
   Plus,
-  Clock
+  Clock,
+  AlertTriangle
 } from 'lucide-react';
 
 interface MyApplicationsViewProps {
@@ -201,12 +202,14 @@ export const MyApplicationsView: React.FC<MyApplicationsViewProps> = ({
                       )}
                       <span>3. Virtual AI Interview</span>
                     </div>
-                    <p style={{ fontSize: 11, color: app.shortlistedByRecruiter ? 'var(--color-primary)' : 'var(--color-text-muted)', marginTop: 4, fontWeight: app.shortlistedByRecruiter ? 600 : 400 }}>
-                      {app.interviewScore 
-                        ? `Scored ${app.interviewScore}/100 &bull; Submitted to Recruiter`
-                        : app.shortlistedByRecruiter 
-                          ? 'Approved by HR &bull; Ready to Attend Now →'
-                          : 'Locked: Awaiting Recruiter Shortlist Approval'}
+                    <p style={{ fontSize: 11, color: app.interviewCanceled ? '#DC2626' : (app.shortlistedByRecruiter ? 'var(--color-primary)' : 'var(--color-text-muted)'), marginTop: 4, fontWeight: app.shortlistedByRecruiter || app.interviewCanceled ? 600 : 400 }}>
+                      {app.interviewCanceled
+                        ? (language === 'ar' ? '✕ تم إلغاء المقابلة (مخالفة الشروط)' : '✕ Interview Canceled (Rule Violated)')
+                        : app.interviewScore 
+                          ? `Scored ${app.interviewScore}/100 &bull; Submitted to Recruiter`
+                          : app.shortlistedByRecruiter 
+                            ? 'Approved by HR &bull; Ready to Attend Now →'
+                            : 'Locked: Awaiting Recruiter Shortlist Approval'}
                     </p>
                   </div>
 
@@ -250,7 +253,18 @@ export const MyApplicationsView: React.FC<MyApplicationsViewProps> = ({
                     <span>{language === 'ar' ? 'توثيق نفاذ' : 'Nafath ID'}</span>
                   </button>
 
-                  {app.shortlistedByRecruiter ? (
+                  {app.interviewCanceled ? (
+                    <button 
+                      className="btn btn-sm"
+                      onClick={() => onAttendInterview(app)}
+                      style={{ fontWeight: 700, backgroundColor: '#FEE2E2', border: '1px solid #FCA5A5', color: '#991B1B' }}
+                    >
+                      <AlertTriangle size={14} />
+                      <span>
+                        {language === 'ar' ? 'المقابلة ملغاة (عرض تقرير المخالفة)' : 'Interview Canceled (View Report)'}
+                      </span>
+                    </button>
+                  ) : app.shortlistedByRecruiter ? (
                     <button 
                       className="btn btn-primary btn-sm"
                       onClick={() => onAttendInterview(app)}

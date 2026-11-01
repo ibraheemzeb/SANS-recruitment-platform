@@ -99,9 +99,32 @@ export interface Candidate {
   hasAudioVoice?: boolean;
   interviewCanceled?: boolean;
   ruleViolated?: boolean;
+  warningCount?: number;
+  lastWarningReason?: string;
+  lastWarningReasonAr?: string;
+  lastWarningTimestamp?: string;
   cancellationReason?: string;
   cancellationReasonAr?: string;
   cancellationTimestamp?: string;
+  proctoringSnapshots?: ProctoringSnapshot[];
+  aiContentScore?: number;
+  humanAuthenticityScore?: number;
+}
+
+export interface ProctoringSnapshot {
+  id: string;
+  timestamp: string; // e.g. '00:35'
+  realTime: string;  // e.g. '05:04:12 PM AST'
+  imageUrl: string;
+  status: 'Verified' | 'Flagged';
+  statusAr?: string;
+  faceConfidence: number; // e.g. 99.4
+  gazeDirection: string;  // e.g. 'Direct Screen Focus (98%)'
+  gazeDirectionAr?: string;
+  lighting: string;       // e.g. 'Optimal (96%)'
+  singlePersonVerified: boolean;
+  notes?: string;
+  notesAr?: string;
 }
 
 export interface AuditLog {
@@ -178,9 +201,16 @@ export interface CandidateApplication {
   finalSelected?: boolean;
   interviewCanceled?: boolean;
   ruleViolated?: boolean;
+  warningCount?: number;
+  lastWarningReason?: string;
+  lastWarningReasonAr?: string;
+  lastWarningTimestamp?: string;
   cancellationReason?: string;
   cancellationReasonAr?: string;
   cancellationTimestamp?: string;
+  proctoringSnapshots?: ProctoringSnapshot[];
+  aiContentScore?: number;
+  humanAuthenticityScore?: number;
   nafathStatus: 'Verified' | 'Pending' | 'Unverified';
 }
 

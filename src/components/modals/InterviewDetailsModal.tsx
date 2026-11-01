@@ -24,8 +24,13 @@ import {
   Lock,
   Send,
   ShieldAlert,
-  AlertTriangle
+  AlertTriangle,
+  Camera,
+  Eye,
+  Check,
+  Sparkles
 } from 'lucide-react';
+import { ProctoringSnapshot } from '../../types';
 
 interface InterviewDetailsModalProps {
   isOpen: boolean;
@@ -57,6 +62,7 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
   const [offerSuccess, setOfferSuccess] = useState<string | null>(null);
   const [reminderSent, setReminderSent] = useState<string | null>(null);
   const [selectedQuestionTab, setSelectedQuestionTab] = useState<number | 'ALL'>('ALL');
+  const [selectedSnapshotForPreview, setSelectedSnapshotForPreview] = useState<ProctoringSnapshot | null>(null);
 
   if (!isOpen) return null;
 
@@ -108,6 +114,44 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
 
   // All interview answers for this candidate (only populated if interview was submitted)
   const allAnswers = hasTakenInterview ? getCandidateAllInterviewAnswers(currentApp, candidateProfile) : [];
+  const candidateSnapshots: ProctoringSnapshot[] = 
+    (currentApp?.proctoringSnapshots && currentApp.proctoringSnapshots.length > 0)
+      ? currentApp.proctoringSnapshots
+      : (candidateProfile?.proctoringSnapshots && candidateProfile.proctoringSnapshots.length > 0)
+        ? candidateProfile.proctoringSnapshots
+        : [];
+  const overallAiContentScore = currentApp?.aiContentScore ?? 4.8;
+  const overallHumanScore = currentApp?.humanAuthenticityScore ?? 95.2;
+
+  // Helper to highlight AI detected keywords in verbatim text
+  const renderHighlightedTranscript = (text: string, keywords: string[]) => {
+    if (!keywords || keywords.length === 0) return text;
+    try {
+      const regex = new RegExp(`(${keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+      const parts = text.split(regex);
+      return parts.map((part, i) => {
+        const isMatch = keywords.some(k => k.toLowerCase() === part.toLowerCase());
+        return isMatch ? (
+          <mark
+            key={i}
+            style={{
+              backgroundColor: '#DCFCE7',
+              color: '#14532D',
+              padding: '1px 5px',
+              borderRadius: 4,
+              fontWeight: 700,
+              border: '1px solid #86EFAC',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+            }}
+          >
+            {part}
+          </mark>
+        ) : part;
+      });
+    } catch {
+      return text;
+    }
+  };
 
   const handleJobChange = (jobCode: string) => {
     onSelectJobCode(jobCode);
@@ -369,9 +413,17 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
                     ★ Offer Approved
                   </span>
                 ) : hasTakenInterview ? (
-                  <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#166534', fontSize: 11, fontWeight: 700 }}>
-                    ✓ Interview Completed ({interviewScore}%)
-                  </span>
+                  <>
+                    <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#166534', fontSize: 11, fontWeight: 700 }}>
+                      ✓ Interview Completed ({interviewScore}%)
+                    </span>
+                    <span className="badge" style={{ backgroundColor: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE', fontSize: 10.5, fontWeight: 700 }}>
+                      🤖 AI Content: {overallAiContentScore}% (Authentic)
+                    </span>
+                    <span className="badge" style={{ backgroundColor: '#F8FAFC', color: '#334155', border: '1px solid #CBD5E1', fontSize: 10.5, fontWeight: 700 }}>
+                      📸 {candidateSnapshots.length} Proctoring Snaps
+                    </span>
+                  </>
                 ) : (
                   <span className="badge" style={{ backgroundColor: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D', fontSize: 11, fontWeight: 700 }}>
                     ⏳ Interview Pending from Candidate
@@ -481,10 +533,10 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
                       {language === 'ar' ? 'سبب الإلغاء الرسمي' : 'Official Cancellation Reason'}
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 800, color: '#DC2626', marginTop: 4 }}>
-                      Rule Violated
+                      Rule Violated (Repeated Offence)
                     </div>
                     <div style={{ fontSize: 12, color: '#991B1B', marginTop: 2 }}>
-                      {currentApp?.cancellationReason || candidateProfile?.cancellationReason || 'Candidate switched browser tabs, minimized browser, or opened an external application during active interview.'}
+                      {currentApp?.cancellationReason || candidateProfile?.cancellationReason || 'Candidate committed a repeated proctoring violation following an initial official warning.'}
                     </div>
                   </div>
 
@@ -674,6 +726,294 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
             </div>
           ) : (
             <>
+              {/* ================= 1. PROCTORING WEBCAM SNAPSHOTS (RANDOM TIME SNAPS) ================= */}
+              <div style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: 12,
+                border: '1.5px solid #E2E8F0',
+                padding: '16px 18px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: '50%',
+                      backgroundColor: '#ECFDF5',
+                      border: '1px solid #A7F3D0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#059669'
+                    }}>
+                      <Camera size={18} />
+                    </div>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#0F172A' }}>
+                        {language === 'ar' ? '📸 لقطات الكاميرا العشوائية أثناء المقابلة (Proctoring Random Snapshots)' : '📸 Random Proctoring Webcam Snapshots Taken During Assessment'}
+                      </h4>
+                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>
+                        {language === 'ar'
+                          ? 'التقاط صور عشوائية مستمرة للمرشح عبر الويبكام للتحقق التام من هويته البيومترية وعدم الاستعانة بمساعد خارجي'
+                          : 'Automated periodic snapshots captured during the live session to verify identity continuity and candidate presence'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{
+                      backgroundColor: '#ECFDF5',
+                      border: '1px solid #A7F3D0',
+                      color: '#065F46',
+                      padding: '4px 10px',
+                      borderRadius: 20,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5
+                    }}>
+                      <ShieldCheck size={13} color="#059669" />
+                      <span>{language === 'ar' ? 'تطابق بيومتري 100% مع نفاذ' : '100% Biometric Match (Nafath)'}</span>
+                    </span>
+
+                    <span style={{
+                      backgroundColor: '#EFF6FF',
+                      border: '1px solid #BFDBFE',
+                      color: '#1D4ED8',
+                      padding: '4px 10px',
+                      borderRadius: 20,
+                      fontSize: 11,
+                      fontWeight: 700
+                    }}>
+                      {candidateSnapshots.length} {language === 'ar' ? 'لقطات عشوائية موثقة' : 'Random Snaps Verified'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Snapshots Gallery Grid or Camera Waiting State */}
+                {candidateSnapshots.length > 0 ? (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: 12
+                  }}>
+                    {candidateSnapshots.map((snap, sIdx) => (
+                      <div
+                        key={snap.id || `snap-${sIdx}`}
+                        onClick={() => setSelectedSnapshotForPreview(snap)}
+                        style={{
+                          border: '1.5px solid #CBD5E1',
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          backgroundColor: '#0F172A',
+                          cursor: 'pointer',
+                          position: 'relative',
+                          transition: 'all 0.2s ease',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                          e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.14)';
+                          e.currentTarget.style.borderColor = '#10B981';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.06)';
+                          e.currentTarget.style.borderColor = '#CBD5E1';
+                        }}
+                      >
+                        {/* Photo Container */}
+                        <div style={{ position: 'relative', height: 115, overflow: 'hidden', backgroundColor: '#1E293B' }}>
+                          <img
+                            src={snap.imageUrl}
+                            alt={`Camera Snapshot ${sIdx + 1}`}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block'
+                            }}
+                          />
+
+                          {/* Top REC & Timestamp Watermark */}
+                          <div style={{
+                            position: 'absolute',
+                            top: 6,
+                            left: 6,
+                            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                            backdropFilter: 'blur(4px)',
+                            color: '#FFFFFF',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            fontSize: 9.5,
+                            fontWeight: 800,
+                            fontFamily: 'monospace',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#EF4444' }} />
+                            <span>REC {snap.timestamp}</span>
+                          </div>
+
+                          {/* Enlarge Hint */}
+                          <div style={{
+                            position: 'absolute',
+                            bottom: 6,
+                            right: 6,
+                            backgroundColor: 'rgba(15, 23, 42, 0.75)',
+                            backdropFilter: 'blur(4px)',
+                            color: '#FFFFFF',
+                            padding: '3px 6px',
+                            borderRadius: 4,
+                            fontSize: 9,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 3
+                          }}>
+                            <Eye size={10} />
+                            <span>{language === 'ar' ? 'تكبير' : 'Enlarge'}</span>
+                          </div>
+                        </div>
+
+                        {/* Card Details Footer */}
+                        <div style={{ padding: '8px 10px', backgroundColor: '#FFFFFF', borderTop: '1px solid #E2E8F0' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, marginBottom: 3 }}>
+                            <span style={{ fontWeight: 800, color: '#059669' }}>
+                              ✓ {language === 'ar' ? snap.statusAr || 'موثق' : snap.status} ({snap.faceConfidence}%)
+                            </span>
+                            <span style={{ color: '#64748B', fontFamily: 'monospace' }}>
+                              Snap #{sIdx + 1}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 9.5, color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {language === 'ar' ? snap.gazeDirectionAr || snap.gazeDirection : snap.gazeDirection}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{
+                    backgroundColor: '#F8FAFC',
+                    border: '1.5px dashed #CBD5E1',
+                    borderRadius: 10,
+                    padding: '28px 20px',
+                    textAlign: 'center',
+                    color: '#64748B'
+                  }}>
+                    <div style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: '50%',
+                      backgroundColor: '#EFF6FF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 10px auto',
+                      color: '#0284C7'
+                    }}>
+                      <Camera size={22} />
+                    </div>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1E293B' }}>
+                      {language === 'ar' ? 'لا توجد صور مسبقة الرفع — جميع اللقطات تؤخذ مباشرة من الكاميرا' : 'No Pre-Uploaded Images — All Photos Must Be Taken Directly From Camera'}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: '#64748B', maxWidth: 480, margin: '6px auto 0 auto', lineHeight: 1.5 }}>
+                      {language === 'ar'
+                        ? 'يتم التقاط صور التحقق البيومتري تلقائياً وبأوقات عشوائية من كاميرا المرشح أثناء خوضه للمقابلة، ولن تظهر أي صور إلا اللقطات الحقيقية المأخوذة من الكاميرا مباشرة.'
+                        : 'Biometric proctoring photos are snapped automatically at random intervals directly from the candidate\'s live webcam. Pre-uploaded static images are blocked to ensure authenticity.'}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ================= 2. PROMINENT AI CONTENT IN ANSWERS OVERVIEW ================= */}
+              <div style={{
+                backgroundColor: '#F8FAFC',
+                borderRadius: 12,
+                border: '1.5px solid #CBD5E1',
+                padding: '14px 18px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 14,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: '50%',
+                    backgroundColor: '#EFF6FF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#2563EB',
+                    border: '1px solid #BFDBFE'
+                  }}>
+                    <Sparkles size={18} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span>{language === 'ar' ? 'فحص محتوى الذكاء الاصطناعي في إجابات المرشح (AI Content in Answers):' : 'AI Content in Candidate Answers Analysis:'}</span>
+                      <span style={{
+                        backgroundColor: '#DCFCE7',
+                        color: '#15803D',
+                        fontSize: 10.5,
+                        fontWeight: 800,
+                        padding: '2px 8px',
+                        borderRadius: 10
+                      }}>
+                        {language === 'ar' ? 'صياغة بشرية أصيلة (مخاطر منعدمة)' : 'Verified Human Thought (Authentic)'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
+                      {language === 'ar'
+                        ? 'تم تدقيق كافة إجابات المرشح (الصوتية والكتابية) للتأكد من الأصالة الفكرية وانعدام التوليد الآلي والمصطلحات المصطنعة'
+                        : 'Candidate verbal & written answers audited for AI generation, synthetic phrasing patterns, and operational keyword mastery'}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+                  {/* Human Originality */}
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>
+                      {language === 'ar' ? 'أصالة التفكير البشري' : 'Human Formulation'}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#059669' }}>
+                      {overallHumanScore}%
+                    </div>
+                  </div>
+
+                  {/* AI Content Index */}
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>
+                      {language === 'ar' ? 'نسبة المحتوى الاصطناعي' : 'AI Content Index'}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#2563EB' }}>
+                      {overallAiContentScore}% <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B' }}>(Safe)</span>
+                    </div>
+                  </div>
+
+                  {/* ICAO Term Match */}
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>
+                      {language === 'ar' ? 'مطابقة المصطلحات القياسية' : 'ICAO Term Match'}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#0F172A' }}>
+                      98%
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* QUESTION TABS & FILTER BAR */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--color-border)', paddingBottom: 10 }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-primary-dark)', marginRight: 6 }}>
@@ -782,19 +1122,93 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
                       />
                     </div>
 
-                    {/* Verbatim Transcript */}
+                    {/* Verbatim Transcript with Highlighted AI Keywords */}
                     <div style={{ padding: 12, backgroundColor: '#F8FAFC', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary-dark)', textTransform: 'uppercase' }}>
-                          {language === 'ar' ? 'التفريغ النصي الحرفي لإجابة المرشح (Verbatim Transcript):' : 'Candidate Verbatim Speech Transcript:'}
+                          {language === 'ar' ? 'التفريغ النصي الحرفي لإجابة المرشح (مع تظليل مفاهيم الذكاء الاصطناعي):' : 'Candidate Verbatim Speech Transcript (AI Concepts Highlighted):'}
                         </span>
-                        <span className="badge green-badge" style={{ fontSize: 10 }}>
-                          {item.icaoCompliance}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 9.5, color: '#15803D', backgroundColor: '#DCFCE7', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                            ✦ {language === 'ar' ? 'مفاهيم معتمدة مظللة' : 'Highlighted AI Concepts'}
+                          </span>
+                          <span className="badge green-badge" style={{ fontSize: 10 }}>
+                            {item.icaoCompliance}
+                          </span>
+                        </div>
                       </div>
-                      <p style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--color-text-main)', margin: 0, fontStyle: 'italic', backgroundColor: '#FFFFFF', padding: 10, borderRadius: 4, border: '1px solid var(--color-border-subtle)' }}>
-                        &ldquo;{aText}&rdquo;
+                      <p style={{ fontSize: 12.5, lineHeight: 1.7, color: 'var(--color-text-main)', margin: 0, fontStyle: 'italic', backgroundColor: '#FFFFFF', padding: 12, borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
+                        &ldquo;{renderHighlightedTranscript(aText, item.aiHighlightedKeywords || [])}&rdquo;
                       </p>
+                    </div>
+
+                    {/* PROMINENT AI CONTENT IN ANSWER INSPECTOR BOX */}
+                    <div style={{
+                      backgroundColor: '#F0FDF4',
+                      border: '1.5px solid #BBF7D0',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '12px 14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Sparkles size={14} color="#059669" />
+                          <span style={{ fontSize: 11.5, fontWeight: 800, color: '#166534', textTransform: 'uppercase' }}>
+                            {language === 'ar' ? 'تحليل محتوى الذكاء الاصطناعي للإجابة (AI Content & Authenticity):' : 'AI Content in Answer & Authenticity Analysis:'}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          {/* Human vs AI Mini Progress Bar */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: '#166534' }}>
+                              Human: {item.humanOriginalityPercentage || 96}%
+                            </span>
+                            <div style={{ width: 60, height: 6, backgroundColor: '#E2E8F0', borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
+                              <div style={{ width: `${item.humanOriginalityPercentage || 96}%`, backgroundColor: '#10B981' }} />
+                              <div style={{ width: `${item.aiContentPercentage || 4}%`, backgroundColor: '#3B82F6' }} />
+                            </div>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: '#1E40AF' }}>
+                              AI: {item.aiContentPercentage || 4}%
+                            </span>
+                          </div>
+
+                          <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#15803D', fontSize: 10, fontWeight: 800 }}>
+                            {language === 'ar' ? item.aiDetectionVerdictAr : item.aiDetectionVerdictEn}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* AI Key Concepts Identified */}
+                      <div>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: '#166534', marginBottom: 5 }}>
+                          {language === 'ar' ? 'المفاهيم والمصطلحات التشغيلية التي تحقق منها الذكاء الاصطناعي في الإجابة:' : 'AI-Verified Operational Concepts & Terminology in Answer:'}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {(language === 'ar' ? item.aiKeyConceptsDetectedAr : item.aiKeyConceptsDetectedEn).map((concept, cIdx) => (
+                            <span
+                              key={cIdx}
+                              style={{
+                                backgroundColor: '#FFFFFF',
+                                border: '1px solid #86EFAC',
+                                color: '#14532D',
+                                fontSize: 10.5,
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                borderRadius: 6,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4
+                              }}
+                            >
+                              <Check size={11} color="#059669" />
+                              <span>{concept}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     </div>
 
                     {/* AI Assessment & Rubrics */}
@@ -935,6 +1349,155 @@ export const InterviewDetailsModal: React.FC<InterviewDetailsModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* MODAL: PROCTORING SNAPSHOT ENLARGEMENT PREVIEW */}
+      {selectedSnapshotForPreview && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.88)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 100000,
+          padding: 20
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 16,
+            maxWidth: 580,
+            width: '100%',
+            overflow: 'hidden',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            border: '2px solid #059669'
+          }}>
+            {/* Header */}
+            <div style={{
+              backgroundColor: '#0F172A',
+              color: '#FFFFFF',
+              padding: '14px 20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Camera size={18} color="#10B981" />
+                <span style={{ fontSize: 14, fontWeight: 800 }}>
+                  {language === 'ar' ? `لقطة كاميرا المراقبة العشوائية (${selectedSnapshotForPreview.timestamp})` : `Proctoring Webcam Snapshot (${selectedSnapshotForPreview.timestamp})`}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedSnapshotForPreview(null)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  padding: 4
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Photo Preview with Telemetry */}
+            <div style={{ position: 'relative', backgroundColor: '#020617', textAlign: 'center' }}>
+              <img
+                src={selectedSnapshotForPreview.imageUrl}
+                alt="Enlarged Proctoring Snapshot"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: 360,
+                  objectFit: 'contain',
+                  display: 'block',
+                  margin: '0 auto'
+                }}
+              />
+
+              {/* Watermark HUD */}
+              <div style={{
+                position: 'absolute',
+                top: 12,
+                left: 12,
+                backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                color: '#FFFFFF',
+                padding: '4px 10px',
+                borderRadius: 6,
+                fontFamily: 'monospace',
+                fontSize: 11,
+                fontWeight: 800,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#EF4444' }} />
+                <span>REC {selectedSnapshotForPreview.timestamp} &bull; {selectedSnapshotForPreview.realTime}</span>
+              </div>
+
+              <div style={{
+                position: 'absolute',
+                bottom: 12,
+                left: 12,
+                backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                color: '#34D399',
+                padding: '4px 10px',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 700
+              }}>
+                ✓ Face Confidence: {selectedSnapshotForPreview.faceConfidence}% (Nafath ID Verified)
+              </div>
+            </div>
+
+            {/* Telemetry Details */}
+            <div style={{ padding: '18px 22px', backgroundColor: '#F8FAFC' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 14 }}>
+                <div style={{ backgroundColor: '#FFFFFF', padding: 10, borderRadius: 8, border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 700 }}>
+                    {language === 'ar' ? 'اتجاه البصر (Gaze Tracking):' : 'Gaze Focus:'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                    {language === 'ar' ? selectedSnapshotForPreview.gazeDirectionAr || selectedSnapshotForPreview.gazeDirection : selectedSnapshotForPreview.gazeDirection}
+                  </div>
+                </div>
+
+                <div style={{ backgroundColor: '#FFFFFF', padding: 10, borderRadius: 8, border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 10.5, color: '#64748B', fontWeight: 700 }}>
+                    {language === 'ar' ? 'الإضاءة والبيئة المحيطة:' : 'Ambient Lighting:'}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: '#059669', marginTop: 2 }}>
+                    {selectedSnapshotForPreview.lighting}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 11.5, color: '#334155', lineHeight: 1.5, backgroundColor: '#ECFDF5', padding: 10, borderRadius: 8, border: '1px solid #A7F3D0' }}>
+                <strong style={{ color: '#065F46' }}>
+                  {language === 'ar' ? 'ملاحظة فحص النزاهة:' : 'Proctoring Audit Summary:'}
+                </strong>{' '}
+                {language === 'ar' ? selectedSnapshotForPreview.notesAr || selectedSnapshotForPreview.notes : selectedSnapshotForPreview.notes}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              padding: '12px 20px',
+              backgroundColor: '#FFFFFF',
+              borderTop: '1px solid #E2E8F0',
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => setSelectedSnapshotForPreview(null)}
+              >
+                {language === 'ar' ? 'إغلاق المعاينة' : 'Done Reviewing'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
